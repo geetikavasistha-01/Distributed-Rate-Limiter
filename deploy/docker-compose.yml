@@ -1,0 +1,18 @@
+services:
+  rate-limiter:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VERSION: v0.1.0
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ENV=development
+      - SHUTDOWN_TIMEOUT=5s
+      - READ_TIMEOUT=5s
+      - READ_HEADER_TIMEOUT=2s
+      - WRITE_TIMEOUT=10s
+      - IDLE_TIMEOUT=120s
+    restart: unless-stopped
