@@ -20,6 +20,11 @@ type Config struct {
 	IdleTimeout       time.Duration
 	RedisAddr         string
 	RedisPassword     string
+	RedisDB           int
+	RedisPoolSize     int
+	RedisDialTimeout  time.Duration
+	RedisReadTimeout  time.Duration
+	RedisWriteTimeout time.Duration
 }
 
 // Load loads the configuration from environment variables.
@@ -59,6 +64,31 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid IDLE_TIMEOUT: %w", err)
 	}
 
+	redisDB, err := getEnvInt("REDIS_DB", 0)
+	if err != nil {
+		return nil, fmt.Errorf("invalid REDIS_DB: %w", err)
+	}
+
+	redisPoolSize, err := getEnvInt("REDIS_POOL_SIZE", 10)
+	if err != nil {
+		return nil, fmt.Errorf("invalid REDIS_POOL_SIZE: %w", err)
+	}
+
+	redisDialTimeout, err := getEnvDuration("REDIS_DIAL_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid REDIS_DIAL_TIMEOUT: %w", err)
+	}
+
+	redisReadTimeout, err := getEnvDuration("REDIS_READ_TIMEOUT", 3*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid REDIS_READ_TIMEOUT: %w", err)
+	}
+
+	redisWriteTimeout, err := getEnvDuration("REDIS_WRITE_TIMEOUT", 3*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid REDIS_WRITE_TIMEOUT: %w", err)
+	}
+
 	return &Config{
 		Port:              port,
 		Env:               getEnvString("ENV", "development"),
@@ -69,6 +99,11 @@ func Load() (*Config, error) {
 		IdleTimeout:       idleTimeout,
 		RedisAddr:         getEnvString("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:     getEnvString("REDIS_PASSWORD", ""),
+		RedisDB:           redisDB,
+		RedisPoolSize:     redisPoolSize,
+		RedisDialTimeout:  redisDialTimeout,
+		RedisReadTimeout:  redisReadTimeout,
+		RedisWriteTimeout: redisWriteTimeout,
 	}, nil
 }
 

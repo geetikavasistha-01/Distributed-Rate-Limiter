@@ -9,6 +9,7 @@ import (
 
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/config"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/middleware"
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 )
 
 // Server encapsulates the HTTP server logic.
@@ -18,11 +19,11 @@ type Server struct {
 }
 
 // NewServer configures and returns a Server instance with configured timeouts, routing, and middlewares.
-func NewServer(cfg *config.Config, version string) *Server {
+func NewServer(cfg *config.Config, version string, rdb redis.RedisClient) *Server {
 	mux := http.NewServeMux()
 
 	// Register health check endpoint (using Go 1.22+ routing enhancements)
-	mux.HandleFunc("GET /health", HealthHandler(version))
+	mux.HandleFunc("GET /health", HealthHandler(version, rdb))
 
 	// Chain middlewares: RequestID (outer) -> Recovery (inner) -> ServeMux (target)
 	var handler http.Handler = mux

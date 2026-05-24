@@ -19,7 +19,8 @@ func TestServerGracefulShutdown(t *testing.T) {
 		IdleTimeout:       1 * time.Second,
 	}
 
-	server := NewServer(cfg, "v0.1.0-test")
+	mockRdb := &MockRedisClient{}
+	server := NewServer(cfg, "v0.1.0-test", mockRdb)
 
 	errChan := make(chan error, 1)
 	go func() {
