@@ -19,6 +19,7 @@ local refill_rate = tonumber(ARGV[2]) -- tokens per millisecond
 local now = tonumber(ARGV[3]) -- current time in milliseconds
 local requested = tonumber(ARGV[4]) -- tokens to consume
 local ttl = tonumber(ARGV[5]) -- key expiry TTL in seconds
+local dry_run = tonumber(ARGV[6] or 0)
 
 -- Get current bucket state from Hash
 local data = redis.call("HMGET", key, "tokens", "last_refilled_at")
@@ -35,19 +36,25 @@ else
     if elapsed > 0 then
         local refill = elapsed * refill_rate
         tokens = math.min(capacity, tokens + refill)
-        last_refilled_at = now
     end
 end
 
 local allowed = false
-if tokens >= requested then
-    tokens = tokens - requested
+local simulated_tokens = tokens
+if simulated_tokens >= requested then
+    simulated_tokens = simulated_tokens - requested
     allowed = true
 end
 
--- Save updated bucket state
-redis.call("HMSET", key, "tokens", tokens, "last_refilled_at", last_refilled_at)
-redis.call("EXPIRE", key, ttl)
+if dry_run == 0 then
+    -- Save updated bucket state
+    redis.call("HMSET", key, "tokens", simulated_tokens, "last_refilled_at", now)
+    redis.call("EXPIRE", key, ttl)
+    tokens = simulated_tokens
+else
+    -- In dry-run, we return the simulated state without writing
+    tokens = simulated_tokens
+end
 
 local remaining = math.floor(tokens)
 
@@ -96,8 +103,13 @@ func (t *TokenBucketLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 	redisKey := fmt.Sprintf("rl:token_bucket:%s", key)
 	requested := 1
 
+	dryRunVal := 0
+	if cfg.DryRun {
+		dryRunVal = 1
+	}
+
 	// Execute Token Bucket Lua script atomically in Redis
-	res, err := t.rdb.Eval(ctx, TokenBucketLuaScript, []string{redisKey}, cfg.Limit, refillRate, nowMs, requested, ttlSecs)
+	res, err := t.rdb.Eval(ctx, TokenBucketLuaScript, []string{redisKey}, cfg.Limit, refillRate, nowMs, requested, ttlSecs, dryRunVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute token bucket Lua script: %w", err)
 	}

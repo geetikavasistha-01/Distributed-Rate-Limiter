@@ -18,6 +18,7 @@ local capacity = tonumber(ARGV[1])
 local window_ms = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
+local dry_run = tonumber(ARGV[5] or 0)
 
 local emission_interval = window_ms / capacity
 local delay_tolerance = window_ms
@@ -36,8 +37,10 @@ local delay = new_tat - now
 local allowed = false
 if delay <= delay_tolerance then
     allowed = true
-    -- 3. Update tat in Redis with expiry
-    redis.call("SET", key, new_tat, "EX", ttl)
+    -- 3. Update tat in Redis with expiry if dry_run is disabled
+    if dry_run == 0 then
+        redis.call("SET", key, new_tat, "EX", ttl)
+    end
 else
     -- Request blocked, keep existing tat boundary
     new_tat = tat
@@ -85,8 +88,13 @@ func (l *LeakyBucketLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 		ttlSecs = 1
 	}
 
+	dryRunVal := 0
+	if cfg.DryRun {
+		dryRunVal = 1
+	}
+
 	// Execute GCRA Lua script atomically in Redis
-	res, err := l.rdb.Eval(ctx, LeakyBucketLuaScript, []string{redisKey}, cfg.Limit, windowMs, nowMs, ttlSecs)
+	res, err := l.rdb.Eval(ctx, LeakyBucketLuaScript, []string{redisKey}, cfg.Limit, windowMs, nowMs, ttlSecs, dryRunVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute leaky bucket Lua script: %w", err)
 	}
