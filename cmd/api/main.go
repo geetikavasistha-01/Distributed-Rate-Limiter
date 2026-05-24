@@ -11,6 +11,7 @@ import (
 
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/api"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/config"
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/utils"
 )
 
@@ -37,8 +38,20 @@ func main() {
 	logger := utils.InitLogger(cfg.Env)
 	logger.Info("application starting", slog.String("version", version))
 
-	// 3. Initialize server
-	server := api.NewServer(cfg, version)
+	// 3. Initialize Redis client connection pool (with retries and backoff)
+	rdb, err := redis.ConnectWithRetry(cfg)
+	if err != nil {
+		logger.Error("failed to initialize Redis connection pool", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer func() {
+		if err := rdb.Close(); err != nil {
+			logger.Error("failed to close Redis connection pool cleanly", slog.Any("error", err))
+		}
+	}()
+
+	// 4. Initialize server
+	server := api.NewServer(cfg, version, rdb)
 
 	// 4. Set up channel for graceful shutdown signal coordination
 	shutdownChan := make(chan os.Signal, 1)
