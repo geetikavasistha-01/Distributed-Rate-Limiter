@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/config"
@@ -39,7 +40,7 @@ func NewClient(rdb *redis.Client) *Client {
 // ConnectWithRetry initializes a Redis connection pool and validates connection availability.
 // Retries on startup failures using an exponential backoff strategy to account for container startup delays.
 func ConnectWithRetry(cfg *config.Config) (RedisClient, error) {
-	rdb := redis.NewClient(&redis.Options{
+	opts := &redis.Options{
 		Addr:         cfg.RedisURL,
 		Password:     cfg.RedisPassword,
 		DB:           cfg.RedisDB,
@@ -47,9 +48,19 @@ func ConnectWithRetry(cfg *config.Config) (RedisClient, error) {
 		DialTimeout:  cfg.RedisDialTimeout,
 		ReadTimeout:  cfg.RedisReadTimeout,
 		WriteTimeout: cfg.RedisWriteTimeout,
-	})
+	}
 
-	client := NewClient(rdb)
+	if strings.HasPrefix(cfg.RedisURL, "redis://") || strings.HasPrefix(cfg.RedisURL, "rediss://") {
+		if parsed, err := redis.ParseURL(cfg.RedisURL); err == nil {
+			parsed.PoolSize = cfg.RedisPoolSize
+			parsed.DialTimeout = cfg.RedisDialTimeout
+			parsed.ReadTimeout = cfg.RedisReadTimeout
+			parsed.WriteTimeout = cfg.RedisWriteTimeout
+			opts = parsed
+		}
+	}
+
+	client := NewClient(redis.NewClient(opts))
 
 	maxRetries := 5
 	backoff := 500 * time.Millisecond

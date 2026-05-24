@@ -12,7 +12,7 @@ services:
         fromService:
           type: redis
           name: rate-limiter-redis
-          property: hostport
+          property: connectionString
       - key: ENV
         value: production
 
