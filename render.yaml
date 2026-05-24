@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: rate-limiter-api
+    env: docker
+    dockerfilePath: deploy/Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: rate-limiter-redis
+          property: hostport
+      - key: ENV
+        value: production
+
+  - type: redis
+    name: rate-limiter-redis
+    plan: free
+    ipAllowList: [] # empty means only internal services can connect
