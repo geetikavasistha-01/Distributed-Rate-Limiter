@@ -20,6 +20,10 @@
 
 A distributed rate limiter that enforces request quotas across **multiple service replicas** using Redis as shared state. Supports four industry-standard algorithms, exposes a clean HTTP API, and ships with full observability via Prometheus metrics.
 
+### 🌐 Live Interactive Demo
+Test the rate limiter directly from your browser:
+**[https://geetikavasistha-01.github.io/Distributed-Rate-Limiter/](https://geetikavasistha-01.github.io/Distributed-Rate-Limiter/)**
+
 Built to demonstrate production Go patterns: atomic Lua scripts, graceful shutdown, structured logging, interface-driven design, and zero-downtime horizontal scaling.
 
 ```
