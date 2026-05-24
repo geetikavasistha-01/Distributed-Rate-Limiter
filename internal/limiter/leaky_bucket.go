@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 )
 
@@ -74,6 +75,7 @@ func NewLeakyBucketLimiter(rdb redis.RedisClient) *LeakyBucketLimiter {
 
 // Allow evaluates a rate limit check by scheduling request emissions under GCRA.
 func (l *LeakyBucketLimiter) Allow(ctx context.Context, key string, cfg LimitConfig) (*Result, error) {
+	start := time.Now()
 	now := l.timeFunc()
 	nowMs := now.UnixMilli()
 	windowMs := cfg.Window.Milliseconds()
@@ -94,7 +96,10 @@ func (l *LeakyBucketLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 	}
 
 	// Execute GCRA Lua script atomically in Redis
+	redisStart := time.Now()
 	res, err := l.rdb.Eval(ctx, LeakyBucketLuaScript, []string{redisKey}, cfg.Limit, windowMs, nowMs, ttlSecs, dryRunVal)
+	redisDuration := time.Since(redisStart).Seconds()
+	metrics.RedisDuration.WithLabelValues("allow").Observe(redisDuration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute leaky bucket Lua script: %w", err)
 	}
@@ -112,8 +117,26 @@ func (l *LeakyBucketLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 		return nil, fmt.Errorf("failed to parse Lua script elements: allowed ok=%t, remaining ok=%t, resetMs ok=%t", ok1, ok2, ok3)
 	}
 
+	allowed := allowedVal == 1
+	duration := time.Since(start).Seconds()
+
+	status := "allowed"
+	if !allowed {
+		status = "blocked"
+	}
+
+	// Update Prometheus metrics
+	keyType := metrics.GetKeyType(key)
+	metrics.RequestsTotal.WithLabelValues("leaky_bucket", status, keyType).Inc()
+	metrics.EvaluationDuration.WithLabelValues("leaky_bucket", status).Observe(duration)
+
+	// Update hot keys if not dry-run
+	if !cfg.DryRun {
+		metrics.IncrementHotKey(ctx, l.rdb, key)
+	}
+
 	return &Result{
-		Allowed:   allowedVal == 1,
+		Allowed:   allowed,
 		Remaining: remaining,
 		ResetTime: time.UnixMilli(resetMs),
 	}, nil

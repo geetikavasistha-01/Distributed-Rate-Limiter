@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,5 +49,33 @@ func TestServerGracefulShutdown(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("timed out waiting for server to exit after shutdown call")
+	}
+}
+
+func TestServer_MetricsEndpoint(t *testing.T) {
+	cfg := &config.Config{
+		Port:              0,
+		Env:               "test",
+		ShutdownTimeout:   1 * time.Second,
+		ReadTimeout:       1 * time.Second,
+		ReadHeaderTimeout: 1 * time.Second,
+		WriteTimeout:      1 * time.Second,
+		IdleTimeout:       1 * time.Second,
+	}
+
+	mockRdb := &MockRedisClient{}
+	server := NewServer(cfg, "v0.1.0-test", mockRdb)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected GET /metrics status 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "rate_limiter_requests_total") {
+		t.Error("expected /metrics output to contain 'rate_limiter_requests_total'")
 	}
 }

@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'rate-limiters'
+    static_configs:
+      - targets:
+          - 'rate-limiter-1:8080'
+          - 'rate-limiter-2:8080'
+          - 'rate-limiter-3:8080'

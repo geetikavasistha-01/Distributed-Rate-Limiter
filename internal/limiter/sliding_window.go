@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 )
 
@@ -105,6 +106,7 @@ func GenerateUniqueMember(timestampMs int64) string {
 
 // Allow evaluates a rate limit request using a sliding log of timestamps inside a Redis ZSET.
 func (s *SlidingWindowLimiter) Allow(ctx context.Context, key string, cfg LimitConfig) (*Result, error) {
+	start := time.Now()
 	now := s.timeFunc()
 	nowMs := now.UnixMilli()
 	windowMs := cfg.Window.Milliseconds()
@@ -122,7 +124,10 @@ func (s *SlidingWindowLimiter) Allow(ctx context.Context, key string, cfg LimitC
 	}
 
 	// Execute sliding window Lua script atomically in Redis
+	redisStart := time.Now()
 	res, err := s.rdb.Eval(ctx, SlidingWindowLuaScript, []string{redisKey}, nowMs, windowMs, cfg.Limit, member, dryRunVal)
+	redisDuration := time.Since(redisStart).Seconds()
+	metrics.RedisDuration.WithLabelValues("allow").Observe(redisDuration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute sliding window Lua script: %w", err)
 	}
@@ -140,8 +145,26 @@ func (s *SlidingWindowLimiter) Allow(ctx context.Context, key string, cfg LimitC
 		return nil, fmt.Errorf("failed to parse Lua script elements: allowed ok=%t, remaining ok=%t, resetMs ok=%t", ok1, ok2, ok3)
 	}
 
+	allowed := allowedVal == 1
+	duration := time.Since(start).Seconds()
+
+	status := "allowed"
+	if !allowed {
+		status = "blocked"
+	}
+
+	// Update Prometheus metrics
+	keyType := metrics.GetKeyType(key)
+	metrics.RequestsTotal.WithLabelValues("sliding_window", status, keyType).Inc()
+	metrics.EvaluationDuration.WithLabelValues("sliding_window", status).Observe(duration)
+
+	// Update hot keys if not dry-run
+	if !cfg.DryRun {
+		metrics.IncrementHotKey(ctx, s.rdb, key)
+	}
+
 	return &Result{
-		Allowed:   allowedVal == 1,
+		Allowed:   allowed,
 		Remaining: remaining,
 		ResetTime: time.UnixMilli(resetMs),
 	}, nil

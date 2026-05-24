@@ -9,8 +9,10 @@ import (
 
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/config"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/limiter"
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/middleware"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Server encapsulates the HTTP server logic.
@@ -25,6 +27,9 @@ func NewServer(cfg *config.Config, version string, rdb redis.RedisClient) *Serve
 
 	// Initialize dynamic configuration manager
 	dc := NewDynamicConfig(rdb)
+
+	// Initialize metrics collectors
+	metrics.Init()
 
 	// Initialize the map of available limiters
 	limiters := map[string]limiter.Limiter{
@@ -44,6 +49,12 @@ func NewServer(cfg *config.Config, version string, rdb redis.RedisClient) *Serve
 	// Register rate limiting evaluation endpoints
 	mux.HandleFunc("POST /check", RateLimitHandler(dc, limiters, true))
 	mux.HandleFunc("POST /consume", RateLimitHandler(dc, limiters, false))
+
+	// Register metrics endpoint
+	mux.Handle("GET /metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		metrics.UpdateHotKeys(r.Context(), rdb)
+		promhttp.Handler().ServeHTTP(w, r)
+	}))
 
 	// Chain middlewares: RequestID (outer) -> Recovery (inner) -> ServeMux (target)
 	var handler http.Handler = mux
