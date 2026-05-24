@@ -179,3 +179,78 @@ func TestTokenBucketLimiter_Concurrency(t *testing.T) {
 		t.Errorf("expected %d requests blocked, got %d", numRequests-allowedCount, blockedCount)
 	}
 }
+
+func TestTokenBucketLimiter_DryRun(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer rdb.Close()
+
+	client := realredis.NewClient(rdb)
+	lim := NewTokenBucketLimiter(client)
+
+	ctx := context.Background()
+	key := "test-dryrun-token"
+	cfgDry := LimitConfig{
+		Limit:  3,
+		Window: 5 * time.Second,
+		DryRun: true,
+	}
+	cfgMut := LimitConfig{
+		Limit:  3,
+		Window: 5 * time.Second,
+		DryRun: false,
+	}
+
+	// 1. Dry run evaluation on empty database
+	res, err := lim.Allow(ctx, key, cfgDry)
+	if err != nil {
+		t.Fatalf("DryRun Allow failed: %v", err)
+	}
+	if !res.Allowed {
+		t.Error("expected dry-run request to be allowed")
+	}
+	if res.Remaining != 2 {
+		t.Errorf("expected remaining=2, got %d", res.Remaining)
+	}
+	if len(mr.Keys()) > 0 {
+		t.Errorf("expected no keys in redis, but found: %v", mr.Keys())
+	}
+
+	// 2. Mutating evaluation
+	res, err = lim.Allow(ctx, key, cfgMut)
+	if err != nil {
+		t.Fatalf("Mutating Allow failed: %v", err)
+	}
+	if !res.Allowed {
+		t.Error("expected mutating request to be allowed")
+	}
+	if res.Remaining != 2 {
+		t.Errorf("expected remaining=2, got %d", res.Remaining)
+	}
+	if len(mr.Keys()) == 0 {
+		t.Error("expected key to be written to redis")
+	}
+
+	// Consume more to hit limit
+	_, _ = lim.Allow(ctx, key, cfgMut)
+	_, _ = lim.Allow(ctx, key, cfgMut)
+
+	// 3. Dry run at limit
+	res, err = lim.Allow(ctx, key, cfgDry)
+	if err != nil {
+		t.Fatalf("DryRun Allow failed: %v", err)
+	}
+	if res.Allowed {
+		t.Error("expected dry-run request to be blocked at the limit")
+	}
+	if res.Remaining != 0 {
+		t.Errorf("expected remaining=0, got %d", res.Remaining)
+	}
+}

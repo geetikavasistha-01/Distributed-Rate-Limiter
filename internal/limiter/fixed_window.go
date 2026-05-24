@@ -10,16 +10,28 @@ import (
 
 // FixedWindowLuaScript is the Lua script executed atomically in Redis.
 // It increments the key and sets the TTL only on the first increment (count == 1).
-// This guarantees that the key will always expire and not leak memory, even
-// if the Go application crashes right after creating the key.
+// If dry_run is 1, it simulates the increment and check without writing to Redis.
 const FixedWindowLuaScript = `
 local key = KEYS[1]
 local limit = tonumber(ARGV[1])
 local window_secs = tonumber(ARGV[2])
+local dry_run = tonumber(ARGV[3] or 0)
 
-local count = redis.call("INCRBY", key, 1)
-if count == 1 then
-    redis.call("EXPIRE", key, window_secs)
+local count = redis.call("GET", key)
+if not count then
+    count = 0
+else
+    count = tonumber(count)
+end
+
+if dry_run == 0 then
+    count = redis.call("INCRBY", key, 1)
+    if count == 1 then
+        redis.call("EXPIRE", key, window_secs)
+    end
+else
+    -- Simulate the increment check without mutating Redis state
+    count = count + 1
 end
 
 local ttl = redis.call("TTL", key)
@@ -48,8 +60,13 @@ func (f *FixedWindowLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 	windowNum := now.Unix() / windowSeconds
 	redisKey := fmt.Sprintf("rl:fixed:%s:%d", key, windowNum)
 
+	dryRunVal := 0
+	if cfg.DryRun {
+		dryRunVal = 1
+	}
+
 	// Execute Lua script atomically on Redis
-	res, err := f.rdb.Eval(ctx, FixedWindowLuaScript, []string{redisKey}, cfg.Limit, windowSeconds)
+	res, err := f.rdb.Eval(ctx, FixedWindowLuaScript, []string{redisKey}, cfg.Limit, windowSeconds, dryRunVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute fixed window Lua script: %w", err)
 	}

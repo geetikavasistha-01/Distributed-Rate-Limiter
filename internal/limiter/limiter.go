@@ -9,6 +9,7 @@ import (
 type LimitConfig struct {
 	Limit  int64         // Maximum number of requests allowed in a window
 	Window time.Duration // Duration of the rate limit window
+	DryRun bool          // Evaluate rate limit without consuming quota
 }
 
 // Result holds the outcome of a rate check request.

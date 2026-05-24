@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/config"
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/limiter"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/middleware"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 )
@@ -22,8 +23,27 @@ type Server struct {
 func NewServer(cfg *config.Config, version string, rdb redis.RedisClient) *Server {
 	mux := http.NewServeMux()
 
+	// Initialize dynamic configuration manager
+	dc := NewDynamicConfig(rdb)
+
+	// Initialize the map of available limiters
+	limiters := map[string]limiter.Limiter{
+		"fixed_window":   limiter.NewFixedWindowLimiter(rdb),
+		"sliding_window": limiter.NewSlidingWindowLimiter(rdb),
+		"token_bucket":   limiter.NewTokenBucketLimiter(rdb),
+		"leaky_bucket":   limiter.NewLeakyBucketLimiter(rdb),
+	}
+
 	// Register health check endpoint (using Go 1.22+ routing enhancements)
 	mux.HandleFunc("GET /health", HealthHandler(version, rdb))
+
+	// Register dynamic config endpoints
+	mux.HandleFunc("GET /config", ConfigHandler(dc))
+	mux.HandleFunc("PUT /config", ConfigHandler(dc))
+
+	// Register rate limiting evaluation endpoints
+	mux.HandleFunc("POST /check", RateLimitHandler(dc, limiters, true))
+	mux.HandleFunc("POST /consume", RateLimitHandler(dc, limiters, false))
 
 	// Chain middlewares: RequestID (outer) -> Recovery (inner) -> ServeMux (target)
 	var handler http.Handler = mux

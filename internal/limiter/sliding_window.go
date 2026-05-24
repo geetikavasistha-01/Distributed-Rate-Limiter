@@ -20,34 +20,54 @@ local now = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
 local limit = tonumber(ARGV[3])
 local member = ARGV[4]
+local dry_run = tonumber(ARGV[5] or 0)
 
 local clear_before = now - window
 
--- 1. Prune expired entries older than (now - window)
-redis.call("ZREMRANGEBYSCORE", key, "-inf", clear_before)
-
--- 2. Count current elements inside the sliding window
-local current_requests = redis.call("ZCARD", key)
-
 local allowed = false
-if current_requests < limit then
-    -- 3. Add current timestamp unique member to the sliding log
-    redis.call("ZADD", key, now, member)
-    current_requests = current_requests + 1
-    allowed = true
-end
-
--- 4. Set key expiration to keep ZSET alive
-redis.call("EXPIRE", key, math.ceil(window / 1000))
-
--- 5. Query oldest timestamp in the sliding window to determine reset boundary
-local oldest_with_score = redis.call("ZRANGE", key, 0, 0, "WITHSCORES")
+local current_requests = 0
 local oldest_ts = now
-if #oldest_with_score > 0 then
-    oldest_ts = tonumber(oldest_with_score[2])
-end
-local reset_ms = oldest_ts + window
 
+if dry_run == 0 then
+    -- 1. Prune expired entries older than (now - window)
+    redis.call("ZREMRANGEBYSCORE", key, "-inf", clear_before)
+
+    -- 2. Count current elements inside the sliding window
+    current_requests = redis.call("ZCARD", key)
+
+    if current_requests < limit then
+        -- 3. Add current timestamp unique member to the sliding log
+        redis.call("ZADD", key, now, member)
+        current_requests = current_requests + 1
+        allowed = true
+    end
+
+    -- 4. Set key expiration to keep ZSET alive
+    redis.call("EXPIRE", key, math.ceil(window / 1000))
+
+    -- 5. Query oldest timestamp in the sliding window to determine reset boundary
+    local oldest_with_score = redis.call("ZRANGE", key, 0, 0, "WITHSCORES")
+    if #oldest_with_score > 0 then
+        oldest_ts = tonumber(oldest_with_score[2])
+    end
+else
+    -- Dry run: Read-only simulation
+    -- 1. Count elements that would remain inside the sliding window
+    current_requests = redis.call("ZCOUNT", key, "(" .. clear_before, "+inf")
+
+    if current_requests < limit then
+        current_requests = current_requests + 1
+        allowed = true
+    end
+
+    -- 2. Query oldest timestamp that is > clear_before
+    local oldest_with_score = redis.call("ZRANGEBYSCORE", key, "(" .. clear_before, "+inf", "WITHSCORES", "LIMIT", 0, 1)
+    if #oldest_with_score > 0 then
+        oldest_ts = tonumber(oldest_with_score[2])
+    end
+end
+
+local reset_ms = oldest_ts + window
 local remaining = limit - current_requests
 if remaining < 0 then
     remaining = 0
@@ -96,8 +116,13 @@ func (s *SlidingWindowLimiter) Allow(ctx context.Context, key string, cfg LimitC
 	redisKey := fmt.Sprintf("rl:sliding:%s", key)
 	member := GenerateUniqueMember(nowMs)
 
+	dryRunVal := 0
+	if cfg.DryRun {
+		dryRunVal = 1
+	}
+
 	// Execute sliding window Lua script atomically in Redis
-	res, err := s.rdb.Eval(ctx, SlidingWindowLuaScript, []string{redisKey}, nowMs, windowMs, cfg.Limit, member)
+	res, err := s.rdb.Eval(ctx, SlidingWindowLuaScript, []string{redisKey}, nowMs, windowMs, cfg.Limit, member, dryRunVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute sliding window Lua script: %w", err)
 	}
