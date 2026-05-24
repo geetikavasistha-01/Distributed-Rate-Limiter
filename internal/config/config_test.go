@@ -3,11 +3,9 @@ package config
 import (
 	"os"
 	"testing"
-	"time"
 )
 
 func TestConfigDefaults(t *testing.T) {
-	// Clear environment variables that might interfere with tests
 	os.Clearenv()
 
 	cfg, err := Load()
@@ -15,65 +13,67 @@ func TestConfigDefaults(t *testing.T) {
 		t.Fatalf("failed to load config: %v", err)
 	}
 
-	if cfg.Port != 8080 {
-		t.Errorf("expected PORT=8080, got %d", cfg.Port)
+	if cfg.ServerPort != 8080 {
+		t.Errorf("expected default ServerPort to be 8080, got %d", cfg.ServerPort)
 	}
 	if cfg.Env != "development" {
 		t.Errorf("expected ENV=development, got %s", cfg.Env)
 	}
-	if cfg.ShutdownTimeout != 5*time.Second {
-		t.Errorf("expected SHUTDOWN_TIMEOUT=5s, got %v", cfg.ShutdownTimeout)
+	if cfg.RedisURL != "localhost:6379" {
+		t.Errorf("expected default REDIS_URL to be localhost:6379, got %s", cfg.RedisURL)
 	}
-	if cfg.ReadTimeout != 5*time.Second {
-		t.Errorf("expected READ_TIMEOUT=5s, got %v", cfg.ReadTimeout)
-	}
-	if cfg.ReadHeaderTimeout != 2*time.Second {
-		t.Errorf("expected READ_HEADER_TIMEOUT=2s, got %v", cfg.ReadHeaderTimeout)
-	}
-	if cfg.WriteTimeout != 10*time.Second {
-		t.Errorf("expected WRITE_TIMEOUT=10s, got %v", cfg.WriteTimeout)
-	}
-	if cfg.IdleTimeout != 120*time.Second {
-		t.Errorf("expected IDLE_TIMEOUT=120s, got %v", cfg.IdleTimeout)
+	if cfg.RateLimitAlgorithm != "fixed_window" {
+		t.Errorf("expected default RATE_LIMIT_ALGORITHM to be fixed_window, got %s", cfg.RateLimitAlgorithm)
 	}
 }
 
 func TestConfigEnvOverwrites(t *testing.T) {
-	os.Clearenv()
-	_ = os.Setenv("PORT", "9090")
-	_ = os.Setenv("ENV", "production")
-	_ = os.Setenv("SHUTDOWN_TIMEOUT", "10s")
+	os.Setenv("SERVER_PORT", "9090")
+	os.Setenv("REDIS_URL", "redis-host:6379")
+	os.Setenv("RATE_LIMIT_ALGORITHM", "token_bucket")
+	os.Setenv("RATE_LIMIT_REQUESTS", "50")
+	
+	defer os.Clearenv()
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("failed to load config: %v", err)
 	}
 
-	if cfg.Port != 9090 {
-		t.Errorf("expected PORT=9090, got %d", cfg.Port)
+	if cfg.ServerPort != 9090 {
+		t.Errorf("expected SERVER_PORT=9090, got %d", cfg.ServerPort)
 	}
-	if cfg.Env != "production" {
-		t.Errorf("expected ENV=production, got %s", cfg.Env)
+	if cfg.RedisURL != "redis-host:6379" {
+		t.Errorf("expected REDIS_URL=redis-host:6379, got %s", cfg.RedisURL)
 	}
-	if cfg.ShutdownTimeout != 10*time.Second {
-		t.Errorf("expected SHUTDOWN_TIMEOUT=10s, got %v", cfg.ShutdownTimeout)
+	if cfg.RateLimitAlgorithm != "token_bucket" {
+		t.Errorf("expected RATE_LIMIT_ALGORITHM=token_bucket, got %s", cfg.RateLimitAlgorithm)
+	}
+	if cfg.RateLimitRequests != 50 {
+		t.Errorf("expected RATE_LIMIT_REQUESTS=50, got %d", cfg.RateLimitRequests)
 	}
 }
 
 func TestConfigInvalidValues(t *testing.T) {
-	os.Clearenv()
-	_ = os.Setenv("PORT", "invalid-port")
+	os.Setenv("SERVER_PORT", "invalid")
+	defer os.Clearenv()
 
 	_, err := Load()
 	if err == nil {
-		t.Error("expected error for invalid PORT, got nil")
+		t.Errorf("expected error for invalid SERVER_PORT, got nil")
 	}
-
-	os.Clearenv()
-	_ = os.Setenv("SHUTDOWN_TIMEOUT", "invalid-duration")
-
+	
+	os.Setenv("SERVER_PORT", "8080")
+	os.Setenv("RATE_LIMIT_REQUESTS", "invalid")
 	_, err = Load()
 	if err == nil {
-		t.Error("expected error for invalid SHUTDOWN_TIMEOUT, got nil")
+		t.Errorf("expected error for invalid RATE_LIMIT_REQUESTS, got nil")
+	}
+	
+	os.Setenv("RATE_LIMIT_REQUESTS", "100")
+	os.Setenv("RATE_LIMIT_WINDOW", "invalid")
+	_, err = Load()
+	if err == nil {
+		t.Errorf("expected error for invalid RATE_LIMIT_WINDOW, got nil")
 	}
 }

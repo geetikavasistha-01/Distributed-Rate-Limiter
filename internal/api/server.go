@@ -2,59 +2,59 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/config"
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/limiter"
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Server encapsulates the HTTP server logic.
+// Server represents the HTTP API server
 type Server struct {
 	httpServer *http.Server
-	cfg        *config.Config
 }
 
-// NewServer configures and returns a Server instance with configured timeouts, routing, and middlewares.
-func NewServer(cfg *config.Config, version string) *Server {
+// NewServer initializes and wires up the HTTP server, middleware, and handlers.
+func NewServer(appCfg *config.Config, limCfg *limiter.LimiterConfig, lim limiter.Limiter, tracker *metrics.HotKeyTracker) *Server {
 	mux := http.NewServeMux()
 
-	// Register health check endpoint (using Go 1.22+ routing enhancements)
-	mux.HandleFunc("GET /health", HealthHandler(version))
+	// Register Handlers
+	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.HandleFunc("GET /health", HealthHandler())
+	mux.HandleFunc("GET /config", ConfigHandler(limCfg))
+	mux.HandleFunc("POST /check", CheckHandler(lim))
+	mux.HandleFunc("POST /consume", ConsumeHandler(lim, tracker))
 
-	// Chain middlewares: RequestID (outer) -> Recovery (inner) -> ServeMux (target)
-	var handler http.Handler = mux
-	handler = middleware.Recovery(handler)
+	// Wire Middleware
+	// Order: Recovery (outer) -> RequestID -> RateLimit (inner)
+	handler := middleware.RateLimit(lim, limCfg)(mux)
 	handler = middleware.RequestID(handler)
+	handler = middleware.Recovery(handler)
 
-	httpServer := &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.Port),
+	addr := fmt.Sprintf(":%d", appCfg.ServerPort)
+	srv := &http.Server{
+		Addr:              addr,
 		Handler:           handler,
-		ReadTimeout:       cfg.ReadTimeout,
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
+		ReadTimeout:       appCfg.ReadTimeout,
+		ReadHeaderTimeout: appCfg.ReadHeaderTimeout,
+		WriteTimeout:      appCfg.WriteTimeout,
+		IdleTimeout:       appCfg.IdleTimeout,
 	}
 
 	return &Server{
-		httpServer: httpServer,
-		cfg:        cfg,
+		httpServer: srv,
 	}
 }
 
-// Start runs the HTTP server. This call blocks until the server stops or encounters an error.
+// Start runs the HTTP server.
 func (s *Server) Start() error {
-	slog.Info("starting HTTP server", slog.String("addr", s.httpServer.Addr), slog.String("env", s.cfg.Env))
-	if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("failed to start server: %w", err)
-	}
-	return nil
+	return s.httpServer.ListenAndServe()
 }
 
 // Shutdown gracefully shuts down the server.
 func (s *Server) Shutdown(ctx context.Context) error {
-	slog.Info("shutting down HTTP server gracefully")
 	return s.httpServer.Shutdown(ctx)
 }
