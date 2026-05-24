@@ -2,7 +2,7 @@
 
 # Distributed Rate Limiter
 
-**A production-ready, horizontally scalable rate limiting service built in Go**
+**A high-performance, horizontally scalable API traffic control system written in Go**
 
 [![Go](https://img.shields.io/badge/Go-1.22-00ADD8?style=flat-square&logo=go)](https://golang.org)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D?style=flat-square&logo=redis)](https://redis.io)
@@ -10,7 +10,7 @@
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C?style=flat-square&logo=prometheus)](https://prometheus.io)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
-[Features](#features) · [Architecture](#architecture) · [Algorithms](#algorithms) · [Quick Start](#quick-start) · [API Reference](#api-reference) · [Benchmarks](#benchmarks)
+[Overview](#overview) · [Architecture](#architecture) · [Algorithms](#algorithms) · [Quick Start](#quick-start) · [API Reference](#api-reference) · [Configuration](#configuration) · [Benchmarks](#benchmarks)
 
 </div>
 
@@ -18,9 +18,11 @@
 
 ## Overview
 
-A distributed rate limiter that enforces request quotas across **multiple service replicas** using Redis as shared state. Supports four industry-standard algorithms, exposes a clean HTTP API, and ships with full observability via Prometheus metrics.
+In modern microservice architectures, protecting upstream services from cascading failures and abusive traffic patterns is a fundamental requirement. A single misbehaving client, a sudden traffic spike, or a malicious actor can exhaust compute resources and bring down entire clusters.
 
-Built to demonstrate production Go patterns: atomic Lua scripts, graceful shutdown, structured logging, interface-driven design, and zero-downtime horizontal scaling.
+The engineering challenge is not merely to limit requests, but to do so **consistently across a fleet of stateless API servers**. When multiple instances of an application receive concurrent requests from the same user, local memory is insufficient to enforce global limits. The system must coordinate state over a network, and it must do so in milliseconds to avoid introducing unacceptable latency into the critical path.
+
+This Distributed Rate Limiter solves that exact problem. By externalizing state to Redis and utilizing atomic Lua scripts, it provides a centralized, race-condition-free source of truth for traffic quotas — allowing the API layer to scale horizontally without compromising limit enforcement.
 
 ```
 Client → Nginx (Round Robin) → [Replica 1 | Replica 2 | Replica 3] → Redis
@@ -30,220 +32,49 @@ Client → Nginx (Round Robin) → [Replica 1 | Replica 2 | Replica 3] → Redis
 
 ---
 
-## Features
+## Architecture and Design
 
-- **4 Rate Limiting Algorithms** — Fixed Window, Sliding Window, Token Bucket, Leaky Bucket (GCRA)
-- **Truly Distributed** — All replicas share state via Redis; consistent decisions across the cluster
-- **Atomic Operations** — Every algorithm uses Lua scripts executed server-side on Redis, eliminating race conditions
-- **Horizontally Scalable** — 3 replicas behind Nginx load balancer, add more with one config line
-- **Hot Key Detection** — Automatic tracking of most-hit keys with configurable threshold alerts
-- **Full Observability** — Prometheus metrics on every request: latency histograms, allow/deny counters, Redis error rates
-- **Production Hardened** — Exponential backoff retries, graceful shutdown, panic recovery, structured slog logging
-- **Clean HTTP API** — `/check` (peek without consuming) and `/consume` (enforce) endpoints
-- **Zero External Framework** — Pure `net/http`, no Gin/Echo; demonstrates idiomatic Go stdlib usage
+The system is designed with a strong emphasis on pluggability, atomicity, and observability.
 
----
+### 1. Atomic Evaluation
+Network round-trips are expensive. Traditional read-modify-write cycles over a network are prone to race conditions under heavy concurrent load. To mitigate this, the core algorithms are implemented as **Lua scripts executed directly within the Redis engine**. This guarantees atomicity for every request check, reducing the operation to a single, highly optimized network call.
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                        Client                           │
-└─────────────────────────┬───────────────────────────────┘
-                          │ HTTP
-┌─────────────────────────▼───────────────────────────────┐
-│                   Nginx Load Balancer                    │
-│              Round-Robin · X-Forwarded-For               │
-└──────────┬──────────────┬──────────────┬────────────────┘
-           │              │              │
-    ┌──────▼──────┐ ┌──────▼──────┐ ┌──────▼──────┐
-    │  Replica 1  │ │  Replica 2  │ │  Replica 3  │
-    │  :8081      │ │  :8082      │ │  :8083      │
-    │             │ │             │ │             │
-    │ Middleware  │ │ Middleware  │ │ Middleware  │
-    │ ├ Recovery  │ │ ├ Recovery  │ │ ├ Recovery  │
-    │ ├ RequestID │ │ ├ RequestID │ │ ├ RequestID │
-    │ └ RateLimit │ │ └ RateLimit │ │ └ RateLimit │
-    │             │ │             │ │             │
-    │  Handlers   │ │  Handlers   │ │  Handlers   │
-    │  /health    │ │  /health    │ │  /health    │
-    │  /check     │ │  /check     │ │  /check     │
-    │  /consume   │ │  /consume   │ │  /consume   │
-    │  /metrics   │ │  /metrics   │ │  /metrics   │
-    └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
-           │              │              │
-           └──────────────┼──────────────┘
-                          │ Redis Commands + Lua Scripts
-                ┌─────────▼─────────┐
-                │    Redis 7         │
-                │  Shared State      │
-                │  Atomic Scripts    │
-                └───────────────────┘
-                          │
-                ┌─────────▼─────────┐
-                │    Prometheus      │
-                │  Scrapes /metrics  │
-                │  on all 3 replicas │
-                └───────────────────┘
+```lua
+-- fixed_window.go — INCR and EXPIRE execute as one atomic unit.
+-- No other Redis command can interleave between them.
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+end
+if count > tonumber(ARGV[1]) then
+  return {0, 0, redis.call('TTL', KEYS[1])}  -- denied
+end
+return {1, tonumber(ARGV[1]) - count, 0}      -- allowed
 ```
 
-### Project Structure
+### 2. Pluggable Algorithmic Engines
+Traffic shaping requirements vary by use case. The system implements four distinct strategies behind a unified `Limiter` interface — swap algorithms via a single environment variable, zero code changes:
 
-```
-├── cmd/api/main.go              # Entry point: wires config → redis → limiter → server
-├── deploy/
-│   ├── Dockerfile               # Multi-stage build → distroless final image
-│   ├── docker-compose.yml       # Redis + 3 replicas + Nginx + Prometheus
-│   ├── nginx.conf               # Round-robin upstream, X-Forwarded-For passthrough
-│   └── prometheus.yml           # Scrape configs for all 3 replica endpoints
-└── internal/
-    ├── api/                     # HTTP server, route handlers, mocks
-    ├── config/                  # Env-based config loading, slog initialization
-    ├── limiter/                 # Interfaces, 4 algorithm implementations, factory
-    ├── metrics/                 # Prometheus collectors, hot key tracker
-    ├── middleware/              # Recovery, RequestID, RateLimit HTTP middlewares
-    └── redis/                   # go-redis wrapper with retry + Lua script support
-```
+| Algorithm | Redis Structure | Best For | Trade-off |
+|---|---|---|---|
+| **Fixed Window** | `INCR` + `EXPIRE` | Simple quota enforcement | Boundary burst possible |
+| **Sliding Window Log** | Sorted Set (`ZADD/ZRANGE`) | Strict per-user limits | Higher memory per key |
+| **Token Bucket** | Hash (`tokens`, `last_refill`) | APIs allowing short bursts | Refill calculation overhead |
+| **Leaky Bucket (GCRA)** | Theoretical Arrival Time | Downstream traffic shaping | Zero burst tolerance |
 
----
-
-## Algorithms
-
-### Fixed Window Counter
-Counts requests in fixed time buckets. Simple and memory-efficient.
-- **Redis**: `INCR` + `EXPIRE` via Lua script
-- **Use case**: Billing quotas, coarse-grained API limits
-- **Trade-off**: Burst traffic possible at window boundaries
-
-### Sliding Window Log
-Tracks exact request timestamps in a sorted set. Most accurate.
-- **Redis**: `ZADD` + `ZREMRANGEBYSCORE` + `ZCARD`
-- **Use case**: Strict per-user API enforcement
-- **Trade-off**: Higher memory usage (stores each request timestamp)
-
-### Token Bucket
-Refills tokens at a steady rate; allows controlled bursting.
-- **Redis**: Hash storing `{tokens, last_refill_time}`
-- **Use case**: APIs that want to allow short bursts (e.g. 10 req/s sustained, 50 burst)
-- **Trade-off**: Slightly more complex refill calculation
-
-### Leaky Bucket (GCRA)
-Generic Cell Rate Algorithm — smooths traffic to a constant output rate.
-- **Redis**: Stores theoretical arrival time (TAT)
-- **Use case**: Outbound rate limiting, webhook delivery, downstream protection
-- **Trade-off**: No burst tolerance; strictly uniform rate
-
----
-
-## Quick Start
-
-### Prerequisites
-- Docker & Docker Compose
-- Go 1.22+ (for local development)
-
-### Run with Docker (Recommended)
-
-```bash
-git clone https://github.com/yourusername/distributed-rate-limiter
-cd distributed-rate-limiter
-
-cp .env.example .env
-
-make docker-up
-```
-
-This starts:
-- Redis on `:6379`
-- 3 Go replicas on `:8081`, `:8082`, `:8083`
-- Nginx load balancer on `:8080`
-- Prometheus on `:9090`
-
-### Run Locally
-
-```bash
-# Start Redis
-docker run -d -p 6379:6379 redis:7-alpine
-
-# Configure
-cp .env.example .env
-
-# Run
-make run
-```
-
-### Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `REDIS_URL` | `redis:6379` | Redis connection address |
-| `REDIS_PASSWORD` | `` | Redis auth password |
-| `RATE_LIMIT_ALGORITHM` | `token_bucket` | `fixed_window` \| `sliding_window` \| `token_bucket` \| `leaky_bucket` |
-| `RATE_LIMIT_REQUESTS` | `100` | Max requests per window |
-| `RATE_LIMIT_WINDOW` | `1m` | Window duration |
-| `SERVER_PORT` | `8080` | HTTP server port |
-| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
-
----
-
-## API Reference
-
-### `GET /health`
-Liveness + Redis connectivity check.
-```json
-{
-  "status": "ok",
-  "redis": "ok"
+```go
+// One interface. Four implementations. Swapped at startup by factory.go.
+type Limiter interface {
+    Allow(ctx context.Context, key string) (Result, error)
 }
 ```
 
-### `GET /config`
-Returns active rate limiting configuration.
-```json
-{
-  "algorithm": "token_bucket",
-  "limit": 100,
-  "window": "1m"
-}
-```
+### 3. In-Memory Hot-Key Tracking
+As traffic flows through the middleware, a concurrent in-memory pipeline identifies and records the most frequently rate-limited keys. This gives operations teams real-time visibility into malicious or runaway clients without adding Redis round-trips to the hot path.
 
-### `POST /consume`
-**Check and consume** one token for the given key. This is the primary enforcement endpoint.
+### 4. Deep Observability
+The rate limiter exposes native Prometheus metrics tracking total requests, limit rejections, and Redis connection errors — scraped independently from all three replicas. This telemetry enables robust alerting rules and comprehensive Grafana dashboards.
 
-```bash
-curl -X POST http://localhost:8080/consume \
-  -H "Content-Type: application/json" \
-  -d '{"key": "user:42"}'
-```
-
-```json
-{
-  "allowed": true,
-  "remaining": 87,
-  "retry_after": "0s"
-}
-```
-
-On rate limit exceeded (`429 Too Many Requests`):
-```json
-{
-  "allowed": false,
-  "remaining": 0,
-  "retry_after": "42s"
-}
-```
-
-### `POST /check`
-**Peek** — check without consuming a token. Useful for UI feedback.
-```bash
-curl -X POST http://localhost:8080/check \
-  -H "Content-Type: application/json" \
-  -d '{"key": "user:42"}'
-```
-
-### `GET /metrics`
-Prometheus exposition format. Scraped automatically by the bundled Prometheus instance.
-
-Key metrics exposed:
 ```
 rate_limiter_requests_total{algorithm="token_bucket", result="allowed"}
 rate_limiter_requests_total{algorithm="token_bucket", result="denied"}
@@ -253,40 +84,167 @@ rate_limiter_redis_errors_total
 
 ---
 
+## Project Structure
+
+```
+├── cmd/api/main.go              # Entry point: wires config → redis → limiter → server
+├── deploy/
+│   ├── Dockerfile               # Multi-stage build → distroless final image
+│   ├── docker-compose.yml       # Redis + 3 replicas + Nginx + Prometheus
+│   ├── nginx.conf               # Round-robin upstream, X-Forwarded-For passthrough
+│   └── prometheus.yml           # Scrape configs for all 3 replica endpoints
+└── internal/
+    ├── api/                     # HTTP server, route handlers, integration tests
+    ├── config/                  # Env-based config loading, slog initialization
+    ├── limiter/                 # Limiter interface, 4 algorithm implementations, factory
+    ├── metrics/                 # Prometheus collectors, hot key tracker
+    ├── middleware/              # Recovery, RequestID, RateLimit HTTP middlewares
+    └── redis/                   # go-redis wrapper with retry + Lua script support
+```
+
+---
+
+## Quick Start
+
+### Prerequisites
+- Go 1.21 or higher
+- Docker and Docker Compose
+- Make
+
+### Run with Docker (Recommended)
+
+Bring up the entire stack — Redis, Nginx load balancer, 3 API replicas, and Prometheus — with a single command:
+
+```bash
+git clone https://github.com/yourusername/distributed-rate-limiter
+cd distributed-rate-limiter
+
+cp .env.example .env
+make docker-up
+```
+
+To tear down the environment:
+
+```bash
+make docker-down
+```
+
+### Local Development
+
+Run the full test suite with race detection and coverage:
+
+```bash
+make test
+```
+
+Build the binary:
+
+```bash
+make build
+```
+
+---
+
+## API Reference
+
+### `POST /consume`
+Check **and consume** one token for the given key. Primary enforcement endpoint.
+
+```bash
+curl -X POST http://localhost:8080/consume \
+  -H "Content-Type: application/json" \
+  -d '{"key": "user-123"}'
+```
+
+```json
+{ "allowed": true, "remaining": 87, "retry_after": "0s" }
+```
+
+On rate limit exceeded — `429 Too Many Requests`:
+
+```json
+{ "allowed": false, "remaining": 0, "retry_after": "42s" }
+```
+
+### `POST /check`
+Dry-run — check without consuming a token. Useful for UI feedback before committing an action.
+
+```bash
+curl -X POST http://localhost:8080/check \
+  -H "Content-Type: application/json" \
+  -d '{"key": "user-123"}'
+```
+
+### `GET /health`
+Liveness and Redis connectivity check.
+
+```bash
+curl http://localhost:8080/health
+```
+
+```json
+{ "status": "ok", "redis": "ok" }
+```
+
+### `GET /config`
+Returns the active rate limiting configuration.
+
+```json
+{ "algorithm": "token_bucket", "limit": 100, "window": "1m" }
+```
+
+### `GET /metrics`
+Prometheus exposition format. Scraped automatically by the bundled Prometheus instance on `:9090`.
+
+---
+
+## Configuration
+
+The system is configured entirely via environment variables, adhering to twelve-factor app principles:
+
+| Variable | Default | Description |
+|---|---|---|
+| `SERVER_PORT` | `8080` | Port the HTTP server binds to |
+| `REDIS_URL` | `localhost:6379` | Redis instance address |
+| `REDIS_PASSWORD` | `` | Redis auth password |
+| `REDIS_DB` | `0` | Redis database index |
+| `RATE_LIMIT_ALGORITHM` | `fixed_window` | `fixed_window` \| `sliding_window` \| `token_bucket` \| `leaky_bucket` |
+| `RATE_LIMIT_REQUESTS` | `10` | Number of allowed requests per window |
+| `RATE_LIMIT_WINDOW` | `1m` | Time window duration (e.g. `30s`, `1m`, `1h`) |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
+
+---
+
 ## Testing
 
 ```bash
-# All tests with race detector
+# Full suite with race detector and coverage
 make test
 
 # Specific package
 go test ./internal/limiter/... -race -v
 
-# With coverage report
+# Coverage report
 go test ./... -coverprofile=coverage.out
 go tool cover -html=coverage.out
 ```
 
-Test coverage includes:
-- Unit tests for all 4 algorithm implementations
-- Concurrency tests (50 goroutines, assert exact allow count)
-- Integration tests with real Redis (handler tests)
-- Mock-based unit tests (no Redis required)
-- Server lifecycle tests (start, graceful shutdown)
-- Factory pattern tests (all algorithms + unknown algorithm error)
+Test coverage includes unit tests for all four algorithm implementations, concurrency tests (50 goroutines asserting exact allow counts), integration tests with real Redis, mock-based handler unit tests, server lifecycle tests, and factory pattern tests.
 
 ---
 
 ## Benchmarks
 
-Tested on: Apple M2, Redis local, single replica
+Tested on Apple M2 · Redis local · single replica
 
 | Algorithm | Throughput | p99 Latency | Memory/key |
 |---|---|---|---|
 | Fixed Window | ~42,000 req/s | 0.8ms | ~50 bytes |
-| Sliding Window | ~28,000 req/s | 1.2ms | ~200 bytes |
-| Token Bucket | ~38,000 req/s | 0.9ms | ~80 bytes |
 | Leaky Bucket | ~40,000 req/s | 0.8ms | ~50 bytes |
+| Token Bucket | ~38,000 req/s | 0.9ms | ~80 bytes |
+| Sliding Window | ~28,000 req/s | 1.2ms | ~200 bytes |
+
+Sliding Window is slower due to three Redis operations per request (ZADD + ZREMRANGEBYSCORE + ZCARD) versus one or two for the others. The trade-off is perfect accuracy — no window boundary bursts are possible.
 
 ---
 
@@ -303,26 +261,6 @@ make lint         # golangci-lint run
 
 ---
 
-## Design Decisions
-
-**Why Lua scripts?** Redis executes Lua atomically — no other command runs between the read and write. This eliminates the TOCTOU race condition that would exist with separate GET + SET commands across distributed replicas.
-
-**Why `net/http` over Gin/Echo?** To demonstrate idiomatic Go. The stdlib router handles this project's needs cleanly. A real production system with 20+ routes would warrant a framework.
-
-**Why the `Limiter` interface?** Enables swapping algorithms at runtime via config without changing any calling code. The factory pattern + interface means adding a 5th algorithm is a single new file with zero changes to existing code.
-
-**Why three replicas?** To prove the distributed claim. A single instance rate limiter is trivial. Three replicas sharing Redis state is where correctness actually matters — and where the Lua scripts earn their place.
-
----
-
 ## License
 
-MIT License — see [LICENSE](LICENSE)
-
----
-
-<div align="center">
-
-Built with Go · Redis · Docker · Prometheus
-
-</div>
+This project is licensed under the [MIT License](LICENSE).
