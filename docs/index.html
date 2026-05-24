@@ -1152,7 +1152,7 @@
   <div class="section-header reveal">
     <span class="section-tag">HTTP API</span>
     <h2>Live Interactive Demo</h2>
-    <p class="section-desc">Connects directly to your locally running backend via <code style="font-family:var(--font-mono);font-size:13px;color:var(--accent);">http://localhost:8080</code>. Make sure <code style="font-family:var(--font-mono);font-size:13px;">make docker-up</code> is running.</p>
+    <p class="section-desc">Connected directly to the live production backend hosted on Render via <code style="font-family:var(--font-mono);font-size:13px;color:var(--accent);">https://rate-limiter-api-2huh.onrender.com</code>.</p>
   </div>
 
   <div class="live-demo-panel reveal">
@@ -1314,7 +1314,7 @@
   showAlgo('fixed');
 
   // API Demo Logic
-  const API_URL = 'http://localhost:8080';
+  const API_URL = 'https://rate-limiter-api-2huh.onrender.com';
   let totalAllowed = 10; // Default fallback
 
   async function checkServerStatus() {
