@@ -11,104 +11,68 @@ import (
 
 // Config holds all configuration parameters for the Rate Limiter Service.
 type Config struct {
-	Port              int
-	Env               string
-	ShutdownTimeout   time.Duration
-	ReadTimeout       time.Duration
-	ReadHeaderTimeout time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
-	RedisAddr         string
-	RedisPassword     string
-	RedisDB           int
-	RedisPoolSize     int
-	RedisDialTimeout  time.Duration
-	RedisReadTimeout  time.Duration
-	RedisWriteTimeout time.Duration
+	ServerPort          int
+	Env                 string
+	LogLevel            string
+	ShutdownTimeout     time.Duration
+	ReadTimeout         time.Duration
+	ReadHeaderTimeout   time.Duration
+	WriteTimeout        time.Duration
+	IdleTimeout         time.Duration
+	RedisURL            string
+	RedisPassword       string
+	RedisDB             int
+	RedisPoolSize       int
+	RedisDialTimeout    time.Duration
+	RedisReadTimeout    time.Duration
+	RedisWriteTimeout   time.Duration
+	RateLimitAlgorithm  string
+	RateLimitRequests   int64
+	RateLimitWindow     time.Duration
 }
 
 // Load loads the configuration from environment variables.
-// If a .env file exists, it will parse it and load values into the environment
-// for keys that are not already set.
 func Load() (*Config, error) {
-	// Attempt to load from .env file if present
 	_ = LoadDotEnv(".env")
 
-	port, err := getEnvInt("PORT", 8080)
+	port, err := getEnvInt("SERVER_PORT", 8080)
 	if err != nil {
-		return nil, fmt.Errorf("invalid PORT: %w", err)
+		return nil, fmt.Errorf("invalid SERVER_PORT: %w", err)
 	}
 
-	shutdownTimeout, err := getEnvDuration("SHUTDOWN_TIMEOUT", 5*time.Second)
+	limit, err := getEnvInt64("RATE_LIMIT_REQUESTS", 100)
 	if err != nil {
-		return nil, fmt.Errorf("invalid SHUTDOWN_TIMEOUT: %w", err)
+		return nil, fmt.Errorf("invalid RATE_LIMIT_REQUESTS: %w", err)
 	}
 
-	readTimeout, err := getEnvDuration("READ_TIMEOUT", 5*time.Second)
+	window, err := getEnvDuration("RATE_LIMIT_WINDOW", time.Minute)
 	if err != nil {
-		return nil, fmt.Errorf("invalid READ_TIMEOUT: %w", err)
-	}
-
-	readHeaderTimeout, err := getEnvDuration("READ_HEADER_TIMEOUT", 2*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid READ_HEADER_TIMEOUT: %w", err)
-	}
-
-	writeTimeout, err := getEnvDuration("WRITE_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid WRITE_TIMEOUT: %w", err)
-	}
-
-	idleTimeout, err := getEnvDuration("IDLE_TIMEOUT", 120*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid IDLE_TIMEOUT: %w", err)
-	}
-
-	redisDB, err := getEnvInt("REDIS_DB", 0)
-	if err != nil {
-		return nil, fmt.Errorf("invalid REDIS_DB: %w", err)
-	}
-
-	redisPoolSize, err := getEnvInt("REDIS_POOL_SIZE", 10)
-	if err != nil {
-		return nil, fmt.Errorf("invalid REDIS_POOL_SIZE: %w", err)
-	}
-
-	redisDialTimeout, err := getEnvDuration("REDIS_DIAL_TIMEOUT", 5*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid REDIS_DIAL_TIMEOUT: %w", err)
-	}
-
-	redisReadTimeout, err := getEnvDuration("REDIS_READ_TIMEOUT", 3*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid REDIS_READ_TIMEOUT: %w", err)
-	}
-
-	redisWriteTimeout, err := getEnvDuration("REDIS_WRITE_TIMEOUT", 3*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid REDIS_WRITE_TIMEOUT: %w", err)
+		return nil, fmt.Errorf("invalid RATE_LIMIT_WINDOW: %w", err)
 	}
 
 	return &Config{
-		Port:              port,
-		Env:               getEnvString("ENV", "development"),
-		ShutdownTimeout:   shutdownTimeout,
-		ReadTimeout:       readTimeout,
-		ReadHeaderTimeout: readHeaderTimeout,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       idleTimeout,
-		RedisAddr:         getEnvString("REDIS_ADDR", "localhost:6379"),
-		RedisPassword:     getEnvString("REDIS_PASSWORD", ""),
-		RedisDB:           redisDB,
-		RedisPoolSize:     redisPoolSize,
-		RedisDialTimeout:  redisDialTimeout,
-		RedisReadTimeout:  redisReadTimeout,
-		RedisWriteTimeout: redisWriteTimeout,
+		ServerPort:          port,
+		Env:                 getEnvString("ENV", "development"),
+		LogLevel:            getEnvString("LOG_LEVEL", "info"),
+		ShutdownTimeout:     getEnvDurationSilent("SHUTDOWN_TIMEOUT", 5*time.Second),
+		ReadTimeout:         getEnvDurationSilent("READ_TIMEOUT", 5*time.Second),
+		ReadHeaderTimeout:   getEnvDurationSilent("READ_HEADER_TIMEOUT", 2*time.Second),
+		WriteTimeout:        getEnvDurationSilent("WRITE_TIMEOUT", 10*time.Second),
+		IdleTimeout:         getEnvDurationSilent("IDLE_TIMEOUT", 120*time.Second),
+		RedisURL:            getEnvString("REDIS_URL", "localhost:6379"),
+		RedisPassword:       getEnvString("REDIS_PASSWORD", ""),
+		RedisDB:             getEnvIntSilent("REDIS_DB", 0),
+		RedisPoolSize:       getEnvIntSilent("REDIS_POOL_SIZE", 10),
+		RedisDialTimeout:    getEnvDurationSilent("REDIS_DIAL_TIMEOUT", 5*time.Second),
+		RedisReadTimeout:    getEnvDurationSilent("REDIS_READ_TIMEOUT", 3*time.Second),
+		RedisWriteTimeout:   getEnvDurationSilent("REDIS_WRITE_TIMEOUT", 3*time.Second),
+		RateLimitAlgorithm:  getEnvString("RATE_LIMIT_ALGORITHM", "fixed_window"),
+		RateLimitRequests:   limit,
+		RateLimitWindow:     window,
 	}, nil
 }
 
-// LoadDotEnv parses a standard key=value .env file and sets environment variables
-// if they are not already set in the current process.
+// LoadDotEnv parses a standard key=value .env file.
 func LoadDotEnv(filenames ...string) error {
 	for _, filename := range filenames {
 		file, err := os.Open(filename)
@@ -132,13 +96,11 @@ func LoadDotEnv(filenames ...string) error {
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
 
-			// Strip surrounding quotes if present
 			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
 				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
 				value = value[1 : len(value)-1]
 			}
 
-			// Only set the env variable if it is not already set by the environment
 			if os.Getenv(key) == "" {
 				_ = os.Setenv(key, value)
 			}
@@ -166,6 +128,26 @@ func getEnvInt(key string, defaultValue int) (int, error) {
 	return val, nil
 }
 
+func getEnvIntSilent(key string, defaultValue int) int {
+	val, err := getEnvInt(key, defaultValue)
+	if err != nil {
+		return defaultValue
+	}
+	return val
+}
+
+func getEnvInt64(key string, defaultValue int64) (int64, error) {
+	valueStr, exists := os.LookupEnv(key)
+	if !exists {
+		return defaultValue, nil
+	}
+	val, err := strconv.ParseInt(valueStr, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return val, nil
+}
+
 func getEnvDuration(key string, defaultValue time.Duration) (time.Duration, error) {
 	valueStr, exists := os.LookupEnv(key)
 	if !exists {
@@ -176,4 +158,12 @@ func getEnvDuration(key string, defaultValue time.Duration) (time.Duration, erro
 		return 0, err
 	}
 	return d, nil
+}
+
+func getEnvDurationSilent(key string, defaultValue time.Duration) time.Duration {
+	d, err := getEnvDuration(key, defaultValue)
+	if err != nil {
+		return defaultValue
+	}
+	return d
 }

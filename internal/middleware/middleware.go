@@ -2,11 +2,11 @@ package middleware
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+
+	"github.com/google/uuid"
 )
 
 type contextKey string
@@ -14,21 +14,12 @@ type contextKey string
 // RequestIDKey is the context key for storing the Request ID.
 const RequestIDKey contextKey = "request_id"
 
-// GenerateRequestID creates a cryptographically secure random request ID.
-func GenerateRequestID() string {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "fallback-req-id"
-	}
-	return hex.EncodeToString(bytes)
-}
-
 // RequestID attaches a unique X-Request-ID header to the response and propagates it in the request Context.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqID := r.Header.Get("X-Request-ID")
 		if reqID == "" {
-			reqID = GenerateRequestID()
+			reqID = uuid.New().String()
 		}
 
 		// Set the header in response

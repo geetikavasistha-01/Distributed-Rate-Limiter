@@ -7,14 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 )
 
-// SlidingWindowLuaScript is the Lua script executed atomically in Redis.
-// It prunes values older than (now - window), counts the size of the set,
-// checks if the request exceeds the limit, adds the current request timestamp,
-// and finds the oldest remaining element in the sliding window to compute the exact reset time.
+// SlidingWindowLuaScript evaluates rate limits using a sliding window log in a Redis ZSET.
 const SlidingWindowLuaScript = `
 local key = KEYS[1]
 local now = tonumber(ARGV[1])
@@ -30,38 +26,29 @@ local current_requests = 0
 local oldest_ts = now
 
 if dry_run == 0 then
-    -- 1. Prune expired entries older than (now - window)
+    -- Prune expired entries
     redis.call("ZREMRANGEBYSCORE", key, "-inf", clear_before)
-
-    -- 2. Count current elements inside the sliding window
     current_requests = redis.call("ZCARD", key)
 
     if current_requests < limit then
-        -- 3. Add current timestamp unique member to the sliding log
         redis.call("ZADD", key, now, member)
         current_requests = current_requests + 1
         allowed = true
     end
 
-    -- 4. Set key expiration to keep ZSET alive
     redis.call("EXPIRE", key, math.ceil(window / 1000))
 
-    -- 5. Query oldest timestamp in the sliding window to determine reset boundary
     local oldest_with_score = redis.call("ZRANGE", key, 0, 0, "WITHSCORES")
     if #oldest_with_score > 0 then
         oldest_ts = tonumber(oldest_with_score[2])
     end
 else
-    -- Dry run: Read-only simulation
-    -- 1. Count elements that would remain inside the sliding window
     current_requests = redis.call("ZCOUNT", key, "(" .. clear_before, "+inf")
-
     if current_requests < limit then
         current_requests = current_requests + 1
         allowed = true
     end
 
-    -- 2. Query oldest timestamp that is > clear_before
     local oldest_with_score = redis.call("ZRANGEBYSCORE", key, "(" .. clear_before, "+inf", "WITHSCORES", "LIMIT", 0, 1)
     if #oldest_with_score > 0 then
         oldest_ts = tonumber(oldest_with_score[2])
@@ -74,98 +61,77 @@ if remaining < 0 then
     remaining = 0
 end
 
-return {allowed and 1 or 0, remaining, reset_ms}
+return {allowed and 1 or 0, remaining, reset_ms - now}
 `
 
-// SlidingWindowLimiter implements the Limiter interface using a Sliding Window Log.
 type SlidingWindowLimiter struct {
 	rdb      redis.RedisClient
-	timeFunc func() time.Time // Injectable clock provider for deterministic testing
+	cfg      LimiterConfig
+	timeFunc func() time.Time
 }
 
-// NewSlidingWindowLimiter instantiates a new SlidingWindowLimiter.
-func NewSlidingWindowLimiter(rdb redis.RedisClient) *SlidingWindowLimiter {
+func NewSlidingWindowLimiter(rdb redis.RedisClient, cfg LimiterConfig) *SlidingWindowLimiter {
 	return &SlidingWindowLimiter{
 		rdb:      rdb,
+		cfg:      cfg,
 		timeFunc: time.Now,
 	}
 }
 
-// GenerateUniqueMember builds a unique string member for the Redis ZSET.
-// Using unique members is critical: under high concurrency/same-millisecond requests,
-// storing only raw timestamps as members would overwrite existing entries,
-// bypassing the ZCARD rate limit check.
 func GenerateUniqueMember(timestampMs int64) string {
 	bytes := make([]byte, 8)
 	if _, err := rand.Read(bytes); err != nil {
-		// Fallback to simple nanosecond seed if entropy fails
 		return fmt.Sprintf("%d-%d", timestampMs, time.Now().UnixNano())
 	}
 	return fmt.Sprintf("%d-%s", timestampMs, hex.EncodeToString(bytes))
 }
 
-// Allow evaluates a rate limit request using a sliding log of timestamps inside a Redis ZSET.
-func (s *SlidingWindowLimiter) Allow(ctx context.Context, key string, cfg LimitConfig) (*Result, error) {
-	start := time.Now()
+func (s *SlidingWindowLimiter) Check(ctx context.Context, key string) (bool, int, time.Duration, error) {
+	return s.execute(ctx, key, 0)
+}
+
+func (s *SlidingWindowLimiter) Simulate(ctx context.Context, key string) (bool, int, time.Duration, error) {
+	return s.execute(ctx, key, 1)
+}
+
+func (s *SlidingWindowLimiter) execute(ctx context.Context, key string, dryRun int) (bool, int, time.Duration, error) {
 	now := s.timeFunc()
 	nowMs := now.UnixMilli()
-	windowMs := cfg.Window.Milliseconds()
+	windowMs := s.cfg.Window.Milliseconds()
 
 	if windowMs <= 0 {
-		return nil, fmt.Errorf("window duration must be at least 1 millisecond")
+		return false, 0, 0, fmt.Errorf("window duration must be at least 1 millisecond")
 	}
 
-	redisKey := fmt.Sprintf("rl:sliding:%s", key)
+	redisKey := fmt.Sprintf("rl:sliding_window:%s", key)
 	member := GenerateUniqueMember(nowMs)
 
-	dryRunVal := 0
-	if cfg.DryRun {
-		dryRunVal = 1
-	}
-
-	// Execute sliding window Lua script atomically in Redis
-	redisStart := time.Now()
-	res, err := s.rdb.Eval(ctx, SlidingWindowLuaScript, []string{redisKey}, nowMs, windowMs, cfg.Limit, member, dryRunVal)
-	redisDuration := time.Since(redisStart).Seconds()
-	metrics.RedisDuration.WithLabelValues("allow").Observe(redisDuration)
+	res, err := s.rdb.Eval(ctx, SlidingWindowLuaScript, []string{redisKey}, nowMs, windowMs, s.cfg.Limit, member, dryRun)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute sliding window Lua script: %w", err)
+		return false, 0, 0, fmt.Errorf("failed to execute sliding window Lua script: %w", err)
 	}
 
-	// Parse Redis response: [allowed (int64), remaining (int64), resetTimeMs (int64)]
 	slice, ok := res.([]interface{})
 	if !ok || len(slice) < 3 {
-		return nil, fmt.Errorf("invalid Lua script response type, expected slice of size 3, got %T", res)
+		return false, 0, 0, fmt.Errorf("invalid Lua script response type")
 	}
 
 	allowedVal, ok1 := slice[0].(int64)
-	remaining, ok2 := slice[1].(int64)
-	resetMs, ok3 := slice[2].(int64)
+	remaining64, ok2 := slice[1].(int64)
+	retryAfterMs, ok3 := slice[2].(int64)
 	if !ok1 || !ok2 || !ok3 {
-		return nil, fmt.Errorf("failed to parse Lua script elements: allowed ok=%t, remaining ok=%t, resetMs ok=%t", ok1, ok2, ok3)
+		return false, 0, 0, fmt.Errorf("failed to parse Lua script elements")
 	}
 
 	allowed := allowedVal == 1
-	duration := time.Since(start).Seconds()
-
-	status := "allowed"
-	if !allowed {
-		status = "blocked"
+	remaining := int(remaining64)
+	
+	var retryAfter time.Duration
+	if retryAfterMs > 0 {
+		retryAfter = time.Duration(retryAfterMs) * time.Millisecond
+	} else if !allowed {
+		retryAfter = s.cfg.Window
 	}
 
-	// Update Prometheus metrics
-	keyType := metrics.GetKeyType(key)
-	metrics.RequestsTotal.WithLabelValues("sliding_window", status, keyType).Inc()
-	metrics.EvaluationDuration.WithLabelValues("sliding_window", status).Observe(duration)
-
-	// Update hot keys if not dry-run
-	if !cfg.DryRun {
-		metrics.IncrementHotKey(ctx, s.rdb, key)
-	}
-
-	return &Result{
-		Allowed:   allowed,
-		Remaining: remaining,
-		ResetTime: time.UnixMilli(resetMs),
-	}, nil
+	return allowed, remaining, retryAfter, nil
 }

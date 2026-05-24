@@ -5,16 +5,16 @@ import (
 )
 
 // New constructs a Limiter instance based on the provided configuration's algorithm.
-func New(cfg Config, redisClient RedisClient) (Limiter, error) {
+func New(cfg LimiterConfig, redisClient RedisClient) (Limiter, error) {
 	switch cfg.Algorithm {
 	case "fixed_window":
-		return NewFixedWindowLimiter(redisClient), nil
+		return NewFixedWindowLimiter(redisClient, cfg), nil
 	case "sliding_window":
-		return NewSlidingWindowLimiter(redisClient), nil
+		return NewSlidingWindowLimiter(redisClient, cfg), nil
 	case "token_bucket":
-		return NewTokenBucketLimiter(redisClient), nil
+		return NewTokenBucketLimiter(redisClient, cfg), nil
 	case "leaky_bucket":
-		return NewLeakyBucketLimiter(redisClient), nil
+		return NewLeakyBucketLimiter(redisClient, cfg), nil
 	default:
 		return nil, fmt.Errorf("unknown algorithm: %s", cfg.Algorithm)
 	}

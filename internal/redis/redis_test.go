@@ -103,7 +103,7 @@ func (m *MockRedisClient) ZCard(ctx context.Context, key string) (int64, error) 
 
 func TestConnectWithRetryFailure(t *testing.T) {
 	cfg := &config.Config{
-		RedisAddr:        "localhost:9999", // Non-existent host/port to guarantee connection failure
+		RedisURL:         "localhost:9999", // Non-existent host/port to guarantee connection failure
 		RedisDialTimeout: 50 * time.Millisecond,
 	}
 

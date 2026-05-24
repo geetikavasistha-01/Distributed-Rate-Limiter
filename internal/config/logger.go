@@ -3,20 +3,30 @@ package config
 import (
 	"log/slog"
 	"os"
+	"strings"
 )
 
-// InitLogger initializes the global structured logger based on the environment.
-// For production, we use JSON output. For development, we use Text/Structured console output.
-func InitLogger(env string) *slog.Logger {
+// InitLogger initializes the global structured logger based on the config.
+func InitLogger(env, logLevel string) *slog.Logger {
 	var handler slog.Handler
+
+	level := slog.LevelInfo
+	switch strings.ToLower(logLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
 
 	if env == "production" {
 		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
+			Level: level,
 		})
 	} else {
 		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
+			Level: level,
 		})
 	}
 
