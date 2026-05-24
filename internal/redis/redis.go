@@ -40,7 +40,7 @@ func NewClient(rdb *redis.Client) *Client {
 // Retries on startup failures using an exponential backoff strategy to account for container startup delays.
 func ConnectWithRetry(cfg *config.Config) (RedisClient, error) {
 	rdb := redis.NewClient(&redis.Options{
-		Addr:         cfg.RedisAddr,
+		Addr:         cfg.RedisURL,
 		Password:     cfg.RedisPassword,
 		DB:           cfg.RedisDB,
 		PoolSize:     cfg.RedisPoolSize,
@@ -61,7 +61,7 @@ func ConnectWithRetry(cfg *config.Config) (RedisClient, error) {
 		cancel()
 
 		if err == nil {
-			slog.Info("successfully established Redis connection pool", slog.String("addr", cfg.RedisAddr))
+			slog.Info("successfully established Redis connection pool", slog.String("addr", cfg.RedisURL))
 			return client, nil
 		}
 

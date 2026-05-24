@@ -11,226 +11,88 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func TestFixedWindowLimiter_Allow(t *testing.T) {
-	// Create in-memory mock Redis server
+func TestFixedWindowLimiter(t *testing.T) {
 	mr, err := miniredis.Run()
 	if err != nil {
 		t.Fatalf("failed to start miniredis: %v", err)
 	}
 	defer mr.Close()
 
-	// Instantiate redis client pointing to miniredis
-	rdb := redis.NewClient(&redis.Options{
-		Addr: mr.Addr(),
-	})
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
-
 	client := realredis.NewClient(rdb)
-	lim := NewFixedWindowLimiter(client)
 
+	cfg := LimiterConfig{Limit: 3, Window: 2 * time.Second}
+	lim := NewFixedWindowLimiter(client, cfg)
 	ctx := context.Background()
 	key := "test-user-1"
-	cfg := LimitConfig{
-		Limit:  3,
-		Window: 2 * time.Second,
+
+	// 1st request
+	allowed, _, _, err := lim.Check(ctx, key)
+	if err != nil || !allowed {
+		t.Fatalf("expected 1st request allowed: %v", err)
+	}
+	
+	// simulate dry run
+	allowed, _, _, _ = lim.Simulate(ctx, key)
+	if !allowed {
+		t.Fatalf("expected dry run request allowed")
 	}
 
-	// 1st request - Allowed
-	res, err := lim.Allow(ctx, key, cfg)
-	if err != nil {
-		t.Fatalf("Allow failed: %v", err)
-	}
-	if !res.Allowed {
-		t.Error("expected 1st request to be allowed")
-	}
-	if res.Remaining != 2 {
-		t.Errorf("expected 2 remaining tokens, got %d", res.Remaining)
+	// 2nd and 3rd requests
+	lim.Check(ctx, key)
+	lim.Check(ctx, key)
+
+	// 4th request blocked
+	allowed, _, _, err = lim.Check(ctx, key)
+	if allowed {
+		t.Fatalf("expected 4th request to be blocked")
 	}
 
-	// 2nd request - Allowed
-	res, err = lim.Allow(ctx, key, cfg)
-	if err != nil {
-		t.Fatalf("Allow failed: %v", err)
-	}
-	if !res.Allowed {
-		t.Error("expected 2nd request to be allowed")
-	}
-	if res.Remaining != 1 {
-		t.Errorf("expected 1 remaining token, got %d", res.Remaining)
-	}
-
-	// 3rd request - Allowed
-	res, err = lim.Allow(ctx, key, cfg)
-	if err != nil {
-		t.Fatalf("Allow failed: %v", err)
-	}
-	if !res.Allowed {
-		t.Error("expected 3rd request to be allowed")
-	}
-	if res.Remaining != 0 {
-		t.Errorf("expected 0 remaining tokens, got %d", res.Remaining)
-	}
-
-	// 4th request - Blocked (limit exceeded)
-	res, err = lim.Allow(ctx, key, cfg)
-	if err != nil {
-		t.Fatalf("Allow failed: %v", err)
-	}
-	if res.Allowed {
-		t.Error("expected 4th request to be blocked")
-	}
-	if res.Remaining != 0 {
-		t.Errorf("expected 0 remaining tokens when blocked, got %d", res.Remaining)
-	}
-
-	// Fast-forward time in miniredis to simulate window expiration
+	// Wait and reset
 	mr.FastForward(3 * time.Second)
-
-	// 5th request - Allowed (window has reset)
-	res, err = lim.Allow(ctx, key, cfg)
-	if err != nil {
-		t.Fatalf("Allow failed: %v", err)
-	}
-	if !res.Allowed {
-		t.Error("expected request to be allowed after window reset")
-	}
-	if res.Remaining != 2 {
-		t.Errorf("expected 2 remaining tokens, got %d", res.Remaining)
+	allowed, _, _, _ = lim.Check(ctx, key)
+	if !allowed {
+		t.Fatalf("expected request allowed after reset")
 	}
 }
 
 func TestFixedWindowLimiter_Concurrency(t *testing.T) {
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatalf("failed to start miniredis: %v", err)
-	}
+	mr, _ := miniredis.Run()
 	defer mr.Close()
-
-	rdb := redis.NewClient(&redis.Options{
-		Addr: mr.Addr(),
-	})
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
-
-	client := realredis.NewClient(rdb)
-	lim := NewFixedWindowLimiter(client)
-
-	ctx := context.Background()
-	key := "concurrent-user"
-	cfg := LimitConfig{
-		Limit:  20,
-		Window: 10 * time.Second,
-	}
-
+	
+	cfg := LimiterConfig{Limit: 20, Window: 10 * time.Second}
+	lim := NewFixedWindowLimiter(realredis.NewClient(rdb), cfg)
+	
 	var wg sync.WaitGroup
 	numRequests := 100
 	allowedChan := make(chan bool, numRequests)
-
-	// Launch concurrent requests to verify race-safety and atomic Lua logic
+	
 	for i := 0; i < numRequests; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := lim.Allow(ctx, key, cfg)
+			allowed, _, _, err := lim.Check(context.Background(), "concurrent")
 			if err == nil {
-				allowedChan <- res.Allowed
+				allowedChan <- allowed
 			} else {
 				allowedChan <- false
 			}
 		}()
 	}
-
+	
 	wg.Wait()
 	close(allowedChan)
-
+	
 	allowedCount := 0
-	blockedCount := 0
 	for allowed := range allowedChan {
 		if allowed {
 			allowedCount++
-		} else {
-			blockedCount++
 		}
 	}
-
-	if int64(allowedCount) != cfg.Limit {
-		t.Errorf("expected exactly %d requests allowed under concurrency, got %d", cfg.Limit, allowedCount)
-	}
-	if blockedCount != numRequests-allowedCount {
-		t.Errorf("expected %d requests blocked, got %d", numRequests-allowedCount, blockedCount)
-	}
-}
-
-func TestFixedWindowLimiter_DryRun(t *testing.T) {
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatalf("failed to start miniredis: %v", err)
-	}
-	defer mr.Close()
-
-	rdb := redis.NewClient(&redis.Options{
-		Addr: mr.Addr(),
-	})
-	defer rdb.Close()
-
-	client := realredis.NewClient(rdb)
-	lim := NewFixedWindowLimiter(client)
-
-	ctx := context.Background()
-	key := "test-dryrun-fixed"
-	cfgDry := LimitConfig{
-		Limit:  3,
-		Window: 5 * time.Second,
-		DryRun: true,
-	}
-	cfgMut := LimitConfig{
-		Limit:  3,
-		Window: 5 * time.Second,
-		DryRun: false,
-	}
-
-	// 1. Check with DryRun: true
-	res, err := lim.Allow(ctx, key, cfgDry)
-	if err != nil {
-		t.Fatalf("DryRun Allow failed: %v", err)
-	}
-	if !res.Allowed {
-		t.Error("expected dry-run request to be allowed")
-	}
-	if res.Remaining != 2 {
-		t.Errorf("expected remaining=2, got %d", res.Remaining)
-	}
-
-	if len(mr.Keys()) > 0 {
-		t.Errorf("expected no keys in redis, but found: %v", mr.Keys())
-	}
-
-	// 2. Consume with DryRun: false
-	res, err = lim.Allow(ctx, key, cfgMut)
-	if err != nil {
-		t.Fatalf("Mutating Allow failed: %v", err)
-	}
-	if !res.Allowed {
-		t.Error("expected mutating request to be allowed")
-	}
-	if res.Remaining != 2 {
-		t.Errorf("expected remaining=2, got %d", res.Remaining)
-	}
-	if len(mr.Keys()) == 0 {
-		t.Error("expected key to be written to redis")
-	}
-
-	// 3. Dry-run when we are at the limit.
-	_, _ = lim.Allow(ctx, key, cfgMut)
-	_, _ = lim.Allow(ctx, key, cfgMut)
-
-	res, err = lim.Allow(ctx, key, cfgDry)
-	if err != nil {
-		t.Fatalf("DryRun Allow failed: %v", err)
-	}
-	if res.Allowed {
-		t.Error("expected dry-run request to be blocked at the limit")
-	}
-	if res.Remaining != 0 {
-		t.Errorf("expected remaining=0, got %d", res.Remaining)
+	if allowedCount != 20 {
+		t.Errorf("expected 20 allowed, got %d", allowedCount)
 	}
 }

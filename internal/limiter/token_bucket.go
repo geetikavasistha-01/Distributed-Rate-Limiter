@@ -5,14 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 )
 
-// TokenBucketLuaScript is the Lua script executed atomically in Redis.
-// It stores the bucket state (tokens, last_refilled_at) in a Redis Hash.
-// On every check, it calculates refilled tokens based on the elapsed time,
-// decrements if allowed, and calculates the exact timestamp when the bucket refills fully.
+// TokenBucketLuaScript implements token bucket in a Redis Hash.
 const TokenBucketLuaScript = `
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
@@ -22,17 +18,14 @@ local requested = tonumber(ARGV[4]) -- tokens to consume
 local ttl = tonumber(ARGV[5]) -- key expiry TTL in seconds
 local dry_run = tonumber(ARGV[6] or 0)
 
--- Get current bucket state from Hash
 local data = redis.call("HMGET", key, "tokens", "last_refilled_at")
 local tokens = tonumber(data[1])
 local last_refilled_at = tonumber(data[2])
 
 if not tokens then
-    -- Initialize bucket to full capacity
     tokens = capacity
     last_refilled_at = now
 else
-    -- Calculate tokens refilled based on elapsed milliseconds
     local elapsed = now - last_refilled_at
     if elapsed > 0 then
         local refill = elapsed * refill_rate
@@ -48,56 +41,57 @@ if simulated_tokens >= requested then
 end
 
 if dry_run == 0 then
-    -- Save updated bucket state
     redis.call("HMSET", key, "tokens", simulated_tokens, "last_refilled_at", now)
     redis.call("EXPIRE", key, ttl)
     tokens = simulated_tokens
 else
-    -- In dry-run, we return the simulated state without writing
     tokens = simulated_tokens
 end
 
 local remaining = math.floor(tokens)
 
--- Reset time: timestamp (ms) when the bucket will be completely full
 local missing_tokens = capacity - tokens
-local reset_ms = now
+local reset_delay_ms = 0
 if refill_rate > 0 and missing_tokens > 0 then
-    reset_ms = now + math.ceil(missing_tokens / refill_rate)
+    reset_delay_ms = math.ceil(missing_tokens / refill_rate)
 end
 
-return {allowed and 1 or 0, remaining, reset_ms}
+return {allowed and 1 or 0, remaining, reset_delay_ms}
 `
 
-// TokenBucketLimiter implements the Limiter interface using the Token Bucket algorithm.
 type TokenBucketLimiter struct {
 	rdb      redis.RedisClient
-	timeFunc func() time.Time // Injectable clock provider for deterministic testing
+	cfg      LimiterConfig
+	timeFunc func() time.Time
 }
 
-// NewTokenBucketLimiter instantiates a new TokenBucketLimiter.
-func NewTokenBucketLimiter(rdb redis.RedisClient) *TokenBucketLimiter {
+func NewTokenBucketLimiter(rdb redis.RedisClient, cfg LimiterConfig) *TokenBucketLimiter {
 	return &TokenBucketLimiter{
 		rdb:      rdb,
+		cfg:      cfg,
 		timeFunc: time.Now,
 	}
 }
 
-// Allow checks if a request is permitted by consuming a token from the bucket.
-// Tokens refill continuously over time based on the limit/window ratio.
-func (t *TokenBucketLimiter) Allow(ctx context.Context, key string, cfg LimitConfig) (*Result, error) {
-	start := time.Now()
+func (t *TokenBucketLimiter) Check(ctx context.Context, key string) (bool, int, time.Duration, error) {
+	return t.execute(ctx, key, 0)
+}
+
+func (t *TokenBucketLimiter) Simulate(ctx context.Context, key string) (bool, int, time.Duration, error) {
+	return t.execute(ctx, key, 1)
+}
+
+func (t *TokenBucketLimiter) execute(ctx context.Context, key string, dryRun int) (bool, int, time.Duration, error) {
 	now := t.timeFunc()
 	nowMs := now.UnixMilli()
-	windowMs := cfg.Window.Milliseconds()
+	windowMs := t.cfg.Window.Milliseconds()
 
 	if windowMs <= 0 {
-		return nil, fmt.Errorf("window duration must be at least 1 millisecond")
+		return false, 0, 0, fmt.Errorf("window duration must be at least 1 millisecond")
 	}
 
-	// Refill rate: tokens refilled per millisecond
-	refillRate := float64(cfg.Limit) / float64(windowMs)
-	ttlSecs := int64(cfg.Window.Seconds())
+	refillRate := float64(t.cfg.Limit) / float64(windowMs)
+	ttlSecs := int64(t.cfg.Window.Seconds())
 	if ttlSecs <= 0 {
 		ttlSecs = 1
 	}
@@ -105,54 +99,26 @@ func (t *TokenBucketLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 	redisKey := fmt.Sprintf("rl:token_bucket:%s", key)
 	requested := 1
 
-	dryRunVal := 0
-	if cfg.DryRun {
-		dryRunVal = 1
-	}
-
-	// Execute Token Bucket Lua script atomically in Redis
-	redisStart := time.Now()
-	res, err := t.rdb.Eval(ctx, TokenBucketLuaScript, []string{redisKey}, cfg.Limit, refillRate, nowMs, requested, ttlSecs, dryRunVal)
-	redisDuration := time.Since(redisStart).Seconds()
-	metrics.RedisDuration.WithLabelValues("allow").Observe(redisDuration)
+	res, err := t.rdb.Eval(ctx, TokenBucketLuaScript, []string{redisKey}, t.cfg.Limit, refillRate, nowMs, requested, ttlSecs, dryRun)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute token bucket Lua script: %w", err)
+		return false, 0, 0, fmt.Errorf("failed to execute token bucket Lua script: %w", err)
 	}
 
-	// Parse Redis response: [allowed (int64), remaining (int64), resetTimeMs (int64)]
 	slice, ok := res.([]interface{})
 	if !ok || len(slice) < 3 {
-		return nil, fmt.Errorf("invalid Lua script response type, expected slice of size 3, got %T", res)
+		return false, 0, 0, fmt.Errorf("invalid Lua script response type")
 	}
 
 	allowedVal, ok1 := slice[0].(int64)
-	remaining, ok2 := slice[1].(int64)
-	resetMs, ok3 := slice[2].(int64)
+	remaining64, ok2 := slice[1].(int64)
+	resetDelayMs, ok3 := slice[2].(int64)
 	if !ok1 || !ok2 || !ok3 {
-		return nil, fmt.Errorf("failed to parse Lua script elements: allowed ok=%t, remaining ok=%t, resetMs ok=%t", ok1, ok2, ok3)
+		return false, 0, 0, fmt.Errorf("failed to parse Lua script elements")
 	}
 
 	allowed := allowedVal == 1
-	duration := time.Since(start).Seconds()
+	remaining := int(remaining64)
+	retryAfter := time.Duration(resetDelayMs) * time.Millisecond
 
-	status := "allowed"
-	if !allowed {
-		status = "blocked"
-	}
-
-	// Update Prometheus metrics
-	keyType := metrics.GetKeyType(key)
-	metrics.RequestsTotal.WithLabelValues("token_bucket", status, keyType).Inc()
-	metrics.EvaluationDuration.WithLabelValues("token_bucket", status).Observe(duration)
-
-	// Update hot keys if not dry-run
-	if !cfg.DryRun {
-		metrics.IncrementHotKey(ctx, t.rdb, key)
-	}
-
-	return &Result{
-		Allowed:   allowed,
-		Remaining: remaining,
-		ResetTime: time.UnixMilli(resetMs),
-	}, nil
+	return allowed, remaining, retryAfter, nil
 }
