@@ -3,7 +3,17 @@ package limiter
 import (
 	"context"
 	"time"
+
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 )
+
+// Config defines the configuration for rate limiting algorithm selection.
+type Config struct {
+	Algorithm string
+}
+
+// RedisClient is an alias for the storage layer's Redis client interface.
+type RedisClient = redis.RedisClient
 
 // LimitConfig configures the rate limit constraints for a specific request scope.
 type LimitConfig struct {

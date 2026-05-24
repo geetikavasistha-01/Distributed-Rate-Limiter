@@ -11,8 +11,8 @@ import (
 
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/api"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/config"
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/limiter"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
-	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/utils"
 )
 
 // version is injected at build time using ldflags
@@ -35,7 +35,7 @@ func main() {
 	}
 
 	// 2. Initialize logger
-	logger := utils.InitLogger(cfg.Env)
+	logger := config.InitLogger(cfg.Env)
 	logger.Info("application starting", slog.String("version", version))
 
 	// 3. Initialize Redis client connection pool (with retries and backoff)
@@ -49,6 +49,13 @@ func main() {
 			logger.Error("failed to close Redis connection pool cleanly", slog.Any("error", err))
 		}
 	}()
+
+	// Ensure limiter.New() is called to construct the limiter
+	limiterCfg := limiter.Config{Algorithm: "fixed_window"}
+	if _, err := limiter.New(limiterCfg, rdb); err != nil {
+		logger.Error("failed to construct limiter", slog.Any("error", err))
+		os.Exit(1)
+	}
 
 	// 4. Initialize server
 	server := api.NewServer(cfg, version, rdb)
