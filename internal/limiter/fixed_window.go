@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 )
 
@@ -50,6 +51,7 @@ func NewFixedWindowLimiter(rdb redis.RedisClient) *FixedWindowLimiter {
 
 // Allow checks if a request exceeds the configured limit for a given key in a fixed window.
 func (f *FixedWindowLimiter) Allow(ctx context.Context, key string, cfg LimitConfig) (*Result, error) {
+	start := time.Now()
 	now := time.Now()
 	windowSeconds := int64(cfg.Window.Seconds())
 	if windowSeconds <= 0 {
@@ -66,7 +68,10 @@ func (f *FixedWindowLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 	}
 
 	// Execute Lua script atomically on Redis
+	redisStart := time.Now()
 	res, err := f.rdb.Eval(ctx, FixedWindowLuaScript, []string{redisKey}, cfg.Limit, windowSeconds, dryRunVal)
+	redisDuration := time.Since(redisStart).Seconds()
+	metrics.RedisDuration.WithLabelValues("allow").Observe(redisDuration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute fixed window Lua script: %w", err)
 	}
@@ -97,8 +102,26 @@ func (f *FixedWindowLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 		resetTime = time.Unix((windowNum+1)*windowSeconds, 0)
 	}
 
+	allowed := count <= cfg.Limit
+	duration := time.Since(start).Seconds()
+
+	status := "allowed"
+	if !allowed {
+		status = "blocked"
+	}
+
+	// Update Prometheus metrics
+	keyType := metrics.GetKeyType(key)
+	metrics.RequestsTotal.WithLabelValues("fixed_window", status, keyType).Inc()
+	metrics.EvaluationDuration.WithLabelValues("fixed_window", status).Observe(duration)
+
+	// Update hot keys if not dry-run
+	if !cfg.DryRun {
+		metrics.IncrementHotKey(ctx, f.rdb, key)
+	}
+
 	return &Result{
-		Allowed:   count <= cfg.Limit,
+		Allowed:   allowed,
 		Remaining: remaining,
 		ResetTime: resetTime,
 	}, nil

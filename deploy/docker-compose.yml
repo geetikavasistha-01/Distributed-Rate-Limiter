@@ -91,3 +91,15 @@ services:
       - rate-limiter-2
       - rate-limiter-3
     restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.1
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - rate-limiter-1
+      - rate-limiter-2
+      - rate-limiter-3
+    restart: unless-stopped

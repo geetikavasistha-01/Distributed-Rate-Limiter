@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/config"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/limiter"
 	realredis "github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/redis/go-redis/v9"
@@ -240,5 +242,49 @@ func TestHealthHandler_Unhealthy(t *testing.T) {
 	}
 	if resp.Checks["redis"] != "unhealthy" {
 		t.Errorf("expected checks.redis=unhealthy, got %s", resp.Checks["redis"])
+	}
+}
+
+func TestMetricsEndpoint_UpdatesHotKeys(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	rdbClient := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer rdbClient.Close()
+
+	rdb := realredis.NewClient(rdbClient)
+	cfg := &config.Config{
+		Port:              0,
+		Env:               "test",
+		ShutdownTimeout:   1 * time.Second,
+		ReadTimeout:       1 * time.Second,
+		ReadHeaderTimeout: 1 * time.Second,
+		WriteTimeout:      1 * time.Second,
+		IdleTimeout:       1 * time.Second,
+	}
+
+	server := NewServer(cfg, "v0.1.0-test", rdb)
+
+	_, err = rdbClient.ZIncrBy(context.Background(), "rl:hotkeys", 5.0, "key_x").Result()
+	if err != nil {
+		t.Fatalf("failed to seed ZSET: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected GET /metrics status 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, `rate_limiter_hot_key_hits{key="key_x"} 5`) {
+		t.Errorf("expected /metrics output to contain 'rate_limiter_hot_key_hits{key=\"key_x\"} 5', got: %s", body)
 	}
 }

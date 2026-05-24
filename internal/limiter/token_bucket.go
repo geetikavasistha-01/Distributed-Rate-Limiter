@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/geetikavasistha-01/Distributed-Rate-Limiter/internal/redis"
 )
 
@@ -85,6 +86,7 @@ func NewTokenBucketLimiter(rdb redis.RedisClient) *TokenBucketLimiter {
 // Allow checks if a request is permitted by consuming a token from the bucket.
 // Tokens refill continuously over time based on the limit/window ratio.
 func (t *TokenBucketLimiter) Allow(ctx context.Context, key string, cfg LimitConfig) (*Result, error) {
+	start := time.Now()
 	now := t.timeFunc()
 	nowMs := now.UnixMilli()
 	windowMs := cfg.Window.Milliseconds()
@@ -109,7 +111,10 @@ func (t *TokenBucketLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 	}
 
 	// Execute Token Bucket Lua script atomically in Redis
+	redisStart := time.Now()
 	res, err := t.rdb.Eval(ctx, TokenBucketLuaScript, []string{redisKey}, cfg.Limit, refillRate, nowMs, requested, ttlSecs, dryRunVal)
+	redisDuration := time.Since(redisStart).Seconds()
+	metrics.RedisDuration.WithLabelValues("allow").Observe(redisDuration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute token bucket Lua script: %w", err)
 	}
@@ -127,8 +132,26 @@ func (t *TokenBucketLimiter) Allow(ctx context.Context, key string, cfg LimitCon
 		return nil, fmt.Errorf("failed to parse Lua script elements: allowed ok=%t, remaining ok=%t, resetMs ok=%t", ok1, ok2, ok3)
 	}
 
+	allowed := allowedVal == 1
+	duration := time.Since(start).Seconds()
+
+	status := "allowed"
+	if !allowed {
+		status = "blocked"
+	}
+
+	// Update Prometheus metrics
+	keyType := metrics.GetKeyType(key)
+	metrics.RequestsTotal.WithLabelValues("token_bucket", status, keyType).Inc()
+	metrics.EvaluationDuration.WithLabelValues("token_bucket", status).Observe(duration)
+
+	// Update hot keys if not dry-run
+	if !cfg.DryRun {
+		metrics.IncrementHotKey(ctx, t.rdb, key)
+	}
+
 	return &Result{
-		Allowed:   allowedVal == 1,
+		Allowed:   allowed,
 		Remaining: remaining,
 		ResetTime: time.UnixMilli(resetMs),
 	}, nil
