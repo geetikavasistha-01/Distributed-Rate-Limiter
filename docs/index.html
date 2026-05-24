@@ -1,0 +1,1404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Distributed Rate Limiter — Project Showcase</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0e17;
+    --bg2: #0f1520;
+    --bg3: #141b2d;
+    --bg4: #1a2340;
+    --line: rgba(255,255,255,0.06);
+    --line2: rgba(255,255,255,0.12);
+    --accent: #00d4ff;
+    --accent2: #7c6cfa;
+    --accent3: #00ff9d;
+    --accent4: #ff6b6b;
+    --amber: #ffb347;
+    --text: #e8edf5;
+    --text2: #8892a4;
+    --text3: #4a5568;
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-display: 'Syne', sans-serif;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-display);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* GRID BACKGROUND */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* NAV */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    padding: 1rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(10,14,23,0.85);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .nav-logo {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 2rem;
+    list-style: none;
+  }
+
+  .nav-links a {
+    font-size: 13px;
+    color: var(--text2);
+    text-decoration: none;
+    letter-spacing: 0.05em;
+    transition: color 0.2s;
+  }
+
+  .nav-links a:hover { color: var(--accent); }
+
+  .nav-cta {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 6px 16px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    text-decoration: none;
+    border-radius: 4px;
+    transition: all 0.2s;
+    letter-spacing: 0.05em;
+  }
+
+  .nav-cta:hover {
+    background: var(--accent);
+    color: var(--bg);
+  }
+
+  /* SECTIONS */
+  section {
+    position: relative;
+    z-index: 1;
+    padding: 5rem 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* HERO */
+  #hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-top: 8rem;
+    max-width: 100%;
+    padding-left: 10%;
+    padding-right: 10%;
+  }
+
+  .hero-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .hero-eyebrow::before {
+    content: '';
+    width: 32px;
+    height: 1px;
+    background: var(--accent);
+  }
+
+  h1 {
+    font-size: clamp(2.5rem, 6vw, 5rem);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    margin-bottom: 1.5rem;
+  }
+
+  .accent-word { color: var(--accent); }
+  .accent2-word { color: var(--accent2); }
+
+  .hero-sub {
+    font-size: 1.1rem;
+    color: var(--text2);
+    max-width: 600px;
+    margin-bottom: 3rem;
+    line-height: 1.7;
+  }
+
+  .hero-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 3rem;
+  }
+
+  .tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 5px 12px;
+    border: 1px solid var(--line2);
+    border-radius: 3px;
+    color: var(--text2);
+    letter-spacing: 0.05em;
+  }
+
+  .tag.go { border-color: rgba(0,212,255,0.4); color: var(--accent); }
+  .tag.redis { border-color: rgba(255,107,107,0.4); color: var(--accent4); }
+  .tag.docker { border-color: rgba(36,150,237,0.4); color: #2496ed; }
+  .tag.prometheus { border-color: rgba(255,179,71,0.4); color: var(--amber); }
+  .tag.nginx { border-color: rgba(0,255,157,0.4); color: var(--accent3); }
+
+  .hero-actions {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .btn-primary {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 12px 28px;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    text-decoration: none;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-primary:hover { background: #00b8e6; transform: translateY(-1px); }
+
+  .btn-ghost {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 12px 28px;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--line2);
+    border-radius: 4px;
+    cursor: pointer;
+    text-decoration: none;
+    letter-spacing: 0.05em;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-ghost:hover { border-color: var(--text2); }
+
+  /* STATS ROW */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-top: 5rem;
+  }
+
+  .stat {
+    background: var(--bg2);
+    padding: 2rem;
+    text-align: center;
+  }
+
+  .stat-num {
+    font-family: var(--font-mono);
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent);
+    display: block;
+  }
+
+  .stat-label {
+    font-size: 12px;
+    color: var(--text2);
+    letter-spacing: 0.05em;
+    margin-top: 4px;
+    display: block;
+  }
+
+  /* SECTION HEADER */
+  .section-header {
+    margin-bottom: 3rem;
+  }
+
+  .section-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+    display: block;
+  }
+
+  h2 {
+    font-size: clamp(1.8rem, 3vw, 2.5rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  .section-desc {
+    color: var(--text2);
+    margin-top: 0.75rem;
+    font-size: 1rem;
+    max-width: 600px;
+  }
+
+  /* ARCH DIAGRAM */
+  .arch-container {
+    background: var(--bg2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 2.5rem;
+    overflow-x: auto;
+  }
+
+  .arch-diagram {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    min-width: 600px;
+  }
+
+  .arch-node {
+    background: var(--bg3);
+    border: 1px solid var(--line2);
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    text-align: center;
+    position: relative;
+  }
+
+  .arch-node.client { border-color: var(--text3); color: var(--text2); }
+  .arch-node.nginx { border-color: rgba(0,255,157,0.5); color: var(--accent3); background: rgba(0,255,157,0.05); }
+  .arch-node.replica { border-color: rgba(0,212,255,0.4); color: var(--accent); background: rgba(0,212,255,0.05); min-width: 160px; }
+  .arch-node.redis { border-color: rgba(255,107,107,0.5); color: var(--accent4); background: rgba(255,107,107,0.05); }
+  .arch-node.prometheus { border-color: rgba(255,179,71,0.5); color: var(--amber); background: rgba(255,179,71,0.05); }
+
+  .arch-row {
+    display: flex;
+    gap: 16px;
+    align-items: stretch;
+    justify-content: center;
+  }
+
+  .arch-arrow {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 36px;
+    color: var(--text3);
+    font-size: 18px;
+    position: relative;
+  }
+
+  .arch-arrow-label {
+    position: absolute;
+    right: calc(50% + 12px);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+    white-space: nowrap;
+  }
+
+  .arch-arrow-wide {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    width: 520px;
+    height: 36px;
+    position: relative;
+  }
+
+  .arch-arrow-wide::before {
+    content: '';
+    position: absolute;
+    left: 80px; right: 80px;
+    top: 50%;
+    height: 1px;
+    background: var(--line2);
+  }
+
+  .arch-bottom {
+    display: flex;
+    gap: 32px;
+    justify-content: center;
+    align-items: flex-start;
+  }
+
+  .arch-sub {
+    font-size: 11px;
+    color: var(--text2);
+    margin-top: 6px;
+    font-family: var(--font-mono);
+  }
+
+  .arch-sub span {
+    display: block;
+    color: var(--text3);
+    font-size: 10px;
+    margin-top: 2px;
+  }
+
+  /* ALGORITHMS */
+  .algo-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+  }
+
+  .algo-card {
+    background: var(--bg2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1.75rem;
+    cursor: pointer;
+    transition: all 0.25s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .algo-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    transition: opacity 0.25s;
+    opacity: 0;
+  }
+
+  .algo-card.fixed::before { background: var(--accent); }
+  .algo-card.sliding::before { background: var(--accent2); }
+  .algo-card.token::before { background: var(--accent3); }
+  .algo-card.leaky::before { background: var(--amber); }
+
+  .algo-card:hover { border-color: var(--line2); transform: translateY(-2px); }
+  .algo-card:hover::before { opacity: 1; }
+
+  .algo-card.active { border-color: var(--line2); }
+  .algo-card.active::before { opacity: 1; }
+
+  .algo-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+
+  .algo-name {
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .algo-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    letter-spacing: 0.05em;
+  }
+
+  .badge-blue { background: rgba(0,212,255,0.1); color: var(--accent); border: 1px solid rgba(0,212,255,0.2); }
+  .badge-purple { background: rgba(124,108,250,0.1); color: var(--accent2); border: 1px solid rgba(124,108,250,0.2); }
+  .badge-green { background: rgba(0,255,157,0.1); color: var(--accent3); border: 1px solid rgba(0,255,157,0.2); }
+  .badge-amber { background: rgba(255,179,71,0.1); color: var(--amber); border: 1px solid rgba(255,179,71,0.2); }
+
+  .algo-desc {
+    font-size: 14px;
+    color: var(--text2);
+    margin-bottom: 1.25rem;
+    line-height: 1.6;
+  }
+
+  .algo-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .algo-meta-row {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+
+  .algo-meta-key {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    min-width: 60px;
+  }
+
+  .algo-meta-val {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text2);
+  }
+
+  /* CODE BLOCK */
+  .code-block {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-top: 1.5rem;
+  }
+
+  .code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg2);
+  }
+
+  .code-filename {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text2);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .code-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+  }
+
+  .code-body {
+    padding: 1.25rem;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.7;
+    overflow-x: auto;
+    color: var(--text2);
+  }
+
+  .kw { color: #c792ea; }
+  .fn { color: #82aaff; }
+  .str { color: #c3e88d; }
+  .cm { color: #546e7a; font-style: italic; }
+  .num { color: var(--amber); }
+  .type { color: #ffcb6b; }
+
+  /* SKILLS SECTION */
+  .skills-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+  }
+
+  .skill-card {
+    background: var(--bg2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1.5rem;
+    transition: border-color 0.2s;
+  }
+
+  .skill-card:hover { border-color: var(--line2); }
+
+  .skill-icon {
+    font-size: 1.5rem;
+    margin-bottom: 0.75rem;
+    display: block;
+  }
+
+  .skill-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.01em;
+  }
+
+  .skill-desc {
+    font-size: 13px;
+    color: var(--text2);
+    line-height: 1.6;
+  }
+
+  /* API DEMO */
+  .api-demo {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+  }
+
+  .api-endpoint {
+    background: var(--bg2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .api-ep-header {
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .method {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 3px;
+    letter-spacing: 0.05em;
+  }
+
+  .method.post { background: rgba(0,255,157,0.1); color: var(--accent3); }
+  .method.get { background: rgba(0,212,255,0.1); color: var(--accent); }
+
+  .endpoint-path {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .api-ep-body {
+    padding: 1.25rem;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--text2);
+  }
+
+  /* METRICS */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .metric-card {
+    background: var(--bg2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1.5rem;
+  }
+
+  .metric-value {
+    font-family: var(--font-mono);
+    font-size: 2rem;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .metric-label {
+    font-size: 12px;
+    color: var(--text2);
+    letter-spacing: 0.03em;
+  }
+
+  .metric-trend {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    margin-top: 8px;
+    display: block;
+  }
+
+  .trend-up { color: var(--accent3); }
+  .trend-neutral { color: var(--text3); }
+
+  /* FOOTER */
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 3rem 10%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: relative;
+    z-index: 1;
+  }
+
+  .footer-left {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text3);
+  }
+
+  .footer-links {
+    display: flex;
+    gap: 1.5rem;
+  }
+
+  .footer-links a {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text2);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+
+  .footer-links a:hover { color: var(--accent); }
+
+  /* DIVIDER */
+  .divider {
+    height: 1px;
+    background: var(--line);
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* SCROLL REVEAL */
+  .reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ALGO DETAIL PANEL */
+  .algo-detail {
+    background: var(--bg2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 2rem;
+    margin-top: 1.5rem;
+    display: none;
+  }
+
+  .algo-detail.visible { display: block; }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+  }
+
+  .detail-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+    display: block;
+  }
+
+  .detail-val {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  /* BENCHMARK TABLE */
+  .bench-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+
+  .bench-table th {
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text3);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .bench-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    color: var(--text2);
+  }
+
+  .bench-table tr:last-child td { border-bottom: none; }
+
+  .bench-table tr:hover td { background: rgba(255,255,255,0.02); color: var(--text); }
+
+  .bench-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .bar-track {
+    flex: 1;
+    height: 4px;
+    background: var(--line);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 1s ease;
+  }
+
+  .bar-num {
+    font-size: 12px;
+    color: var(--text);
+    min-width: 80px;
+    text-align: right;
+  }
+
+  /* RESPONSIVE */
+  @media (max-width: 768px) {
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+    .algo-grid { grid-template-columns: 1fr; }
+    .skills-grid { grid-template-columns: repeat(2, 1fr); }
+    .api-demo { grid-template-columns: 1fr; }
+    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+    .detail-grid { grid-template-columns: 1fr; }
+    nav .nav-links { display: none; }
+    #hero { padding-left: 5%; padding-right: 5%; }
+    footer { flex-direction: column; gap: 1rem; text-align: center; }
+  }
+
+  /* CUSTOM LIVE DEMO STYLES */
+  .live-demo-panel {
+    background: var(--bg3);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 0 20px rgba(0,212,255,0.1);
+  }
+  .live-demo-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+  }
+  .server-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: rgba(255,107,107,0.1);
+    color: var(--accent4);
+    border: 1px solid rgba(255,107,107,0.2);
+  }
+  .server-status.online {
+    background: rgba(0,255,157,0.1);
+    color: var(--accent3);
+    border-color: rgba(0,255,157,0.2);
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: currentColor;
+  }
+  .server-status.online .status-dot {
+    box-shadow: 0 0 8px currentColor;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+  }
+  .demo-controls {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .demo-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--line2);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+  .demo-input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .demo-btn {
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .demo-btn:hover { background: #00b8e6; transform: translateY(-1px); }
+  .demo-btn:active { transform: translateY(1px); }
+  .demo-btn:disabled { background: var(--line2); color: var(--text3); cursor: not-allowed; transform: none; }
+
+  .demo-response {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    padding: 1rem;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    min-height: 120px;
+    max-height: 200px;
+    overflow-y: auto;
+    color: var(--text2);
+    transition: background 0.3s;
+  }
+  
+  .response-line {
+    margin-bottom: 4px;
+  }
+  
+  .flash-green { background: rgba(0,255,157,0.15) !important; }
+  .flash-red { background: rgba(255,107,107,0.15) !important; }
+
+  .gauge-container {
+    display: flex;
+    gap: 4px;
+    margin-top: 1rem;
+    height: 12px;
+  }
+  .gauge-block {
+    flex: 1;
+    background: var(--line2);
+    border-radius: 2px;
+    transition: background 0.2s;
+  }
+  .gauge-block.filled { background: var(--accent3); }
+  .gauge-block.error { background: var(--accent4); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-logo">rate-limiter/</div>
+  <ul class="nav-links">
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#algorithms">Algorithms</a></li>
+    <li><a href="#api">API</a></li>
+    <li><a href="#skills">Skills</a></li>
+    <li><a href="#benchmarks">Benchmarks</a></li>
+  </ul>
+  <a href="https://github.com" class="nav-cta">GitHub →</a>
+</nav>
+
+<!-- HERO -->
+<section id="hero">
+  <div class="hero-eyebrow">Backend Systems · Distributed Infrastructure</div>
+  <h1>
+    <span class="accent-word">Distributed</span><br>
+    Rate <span class="accent2-word">Limiter</span>
+  </h1>
+  <p class="hero-sub">
+    A production-ready rate limiting service built in Go. Enforces request quotas across
+    multiple replicas using Redis-backed atomic Lua scripts — consistent decisions,
+    zero race conditions.
+  </p>
+  <div class="hero-tags">
+    <span class="tag go">Go 1.22</span>
+    <span class="tag redis">Redis 7</span>
+    <span class="tag docker">Docker</span>
+    <span class="tag prometheus">Prometheus</span>
+    <span class="tag nginx">Nginx</span>
+    <span class="tag">Lua Scripts</span>
+    <span class="tag">4 Algorithms</span>
+    <span class="tag">Race-Free</span>
+  </div>
+  <div class="hero-actions">
+    <a href="https://github.com" class="btn-primary">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.92.359.31.678.921.678 1.856 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+      View on GitHub
+    </a>
+    <a href="#api" class="btn-ghost">Try Live Demo →</a>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat">
+      <span class="stat-num">4</span>
+      <span class="stat-label">Algorithms</span>
+    </div>
+    <div class="stat">
+      <span class="stat-num">3</span>
+      <span class="stat-label">Replicas</span>
+    </div>
+    <div class="stat">
+      <span class="stat-num">42k</span>
+      <span class="stat-label">Req/sec peak</span>
+    </div>
+    <div class="stat">
+      <span class="stat-num">0</span>
+      <span class="stat-label">Race conditions</span>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ARCHITECTURE -->
+<section id="architecture">
+  <div class="section-header reveal">
+    <span class="section-tag">System Design</span>
+    <h2>How it's distributed</h2>
+    <p class="section-desc">Three replicas share a single Redis instance. Every rate limit decision is atomic — regardless of which replica handles the request.</p>
+  </div>
+
+  <div class="arch-container reveal">
+    <div class="arch-diagram">
+      <div class="arch-node client">Client Request</div>
+      <div class="arch-arrow">
+        <span class="arch-arrow-label">HTTP</span>
+        ↓
+      </div>
+      <div class="arch-node nginx">Nginx Load Balancer · Round-Robin · X-Forwarded-For</div>
+      <div style="display:flex;justify-content:center;width:520px;height:36px;align-items:flex-end;position:relative;">
+        <div style="position:absolute;left:calc(50% - 175px);right:calc(50% - 175px);top:50%;height:1px;background:rgba(255,255,255,0.08);"></div>
+        <div style="position:absolute;left:calc(50% - 175px);width:1px;height:100%;background:rgba(255,255,255,0.08);"></div>
+        <div style="position:absolute;left:50%;transform:translateX(-50%);width:1px;height:100%;background:rgba(255,255,255,0.08);"></div>
+        <div style="position:absolute;right:calc(50% - 175px);width:1px;height:100%;background:rgba(255,255,255,0.08);"></div>
+      </div>
+      <div class="arch-row">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
+          <div class="arch-node replica" style="width:160px;">
+            <div>Replica 1</div>
+            <div class="arch-sub">:8081<span>Recovery · RequestID · RateLimit</span></div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
+          <div class="arch-node replica" style="width:160px;">
+            <div>Replica 2</div>
+            <div class="arch-sub">:8082<span>Recovery · RequestID · RateLimit</span></div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
+          <div class="arch-node replica" style="width:160px;">
+            <div>Replica 3</div>
+            <div class="arch-sub">:8083<span>Recovery · RequestID · RateLimit</span></div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:center;width:520px;height:36px;align-items:flex-start;position:relative;">
+        <div style="position:absolute;left:calc(50% - 175px);right:calc(50% - 175px);top:50%;height:1px;background:rgba(255,255,255,0.08);"></div>
+        <div style="position:absolute;left:calc(50% - 175px);width:1px;height:100%;background:rgba(255,255,255,0.08);"></div>
+        <div style="position:absolute;left:50%;transform:translateX(-50%);width:1px;height:100%;background:rgba(255,255,255,0.08);"></div>
+        <div style="position:absolute;right:calc(50% - 175px);width:1px;height:100%;background:rgba(255,255,255,0.08);"></div>
+      </div>
+      <div class="arch-bottom">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+          <div class="arch-node redis" style="width:220px;">
+            <div>Redis 7</div>
+            <div class="arch-sub">Shared State · Atomic Lua Scripts<span>rl:{algo}:{key} namespace</span></div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+          <div class="arch-node prometheus" style="width:200px;">
+            <div>Prometheus</div>
+            <div class="arch-sub">Scrapes all 3 replicas<span>rate_limiter_* metrics</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="code-block reveal" style="margin-top:2rem;">
+    <div class="code-header">
+      <div class="code-filename">
+        <div class="code-dot" style="background:#ff6b6b;"></div>
+        <div class="code-dot" style="background:#ffb347;"></div>
+        <div class="code-dot" style="background:#00d4ff;"></div>
+        internal/limiter/fixed_window.go — Lua script ensures atomicity
+      </div>
+    </div>
+    <div class="code-body"><span class="kw">const</span> fixedWindowScript = <span class="str">`
+  local key    = KEYS[1]
+  local limit  = tonumber(ARGV[1])
+  local window = tonumber(ARGV[2])
+
+  local count = redis.call('INCR', key)
+  if count == 1 then
+    redis.call('EXPIRE', key, window)   <span class="cm">-- set TTL on first request</span>
+  end
+
+  if count > limit then
+    return {0, 0, redis.call('TTL', key)}   <span class="cm">-- denied</span>
+  end
+  return {1, limit - count, 0}              <span class="cm">-- allowed</span>
+`</span>
+
+<span class="cm">// INCR + EXPIRE execute as one atomic unit.
+// No other Redis command can interleave between them.
+// This is why we use Lua — not separate GET + SET.</span></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ALGORITHMS -->
+<section id="algorithms">
+  <div class="section-header reveal">
+    <span class="section-tag">Core Logic</span>
+    <h2>Four algorithms, one interface</h2>
+    <p class="section-desc">Swap algorithms via a single environment variable. The <code style="font-family:var(--font-mono);font-size:13px;color:var(--accent);">Limiter</code> interface abstracts everything — callers never know which algorithm is running.</p>
+  </div>
+
+  <div class="algo-grid reveal">
+    <div class="algo-card fixed active" onclick="showAlgo('fixed')">
+      <div class="algo-header">
+        <div class="algo-name">Fixed Window Counter</div>
+        <span class="algo-badge badge-blue">SIMPLE</span>
+      </div>
+      <p class="algo-desc">Counts requests in fixed time buckets. Cheapest memory footprint. A new window starts on schedule regardless of traffic.</p>
+    </div>
+
+    <div class="algo-card sliding" onclick="showAlgo('sliding')">
+      <div class="algo-header">
+        <div class="algo-name">Sliding Window Log</div>
+        <span class="algo-badge badge-purple">PRECISE</span>
+      </div>
+      <p class="algo-desc">Tracks exact timestamps in a sorted set. The window slides with every request — no boundary burst possible.</p>
+    </div>
+
+    <div class="algo-card token" onclick="showAlgo('token')">
+      <div class="algo-header">
+        <div class="algo-name">Token Bucket</div>
+        <span class="algo-badge badge-green">BURST</span>
+      </div>
+      <p class="algo-desc">Refills tokens at a steady rate. Allows controlled bursting — callers can save unused capacity and spend it later.</p>
+    </div>
+
+    <div class="algo-card leaky" onclick="showAlgo('leaky')">
+      <div class="algo-header">
+        <div class="algo-name">Leaky Bucket (GCRA)</div>
+        <span class="algo-badge badge-amber">SMOOTH</span>
+      </div>
+      <p class="algo-desc">Generic Cell Rate Algorithm. Enforces strictly uniform output rate by storing a theoretical arrival time (TAT).</p>
+    </div>
+  </div>
+  
+  <div class="algo-detail visible" id="algo-detail">
+    <div class="detail-grid" id="detail-content">
+      <!-- Content populated by JS -->
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- API LIVE DEMO -->
+<section id="api">
+  <div class="section-header reveal">
+    <span class="section-tag">HTTP API</span>
+    <h2>Live Interactive Demo</h2>
+    <p class="section-desc">Connects directly to your locally running backend via <code style="font-family:var(--font-mono);font-size:13px;color:var(--accent);">http://localhost:8080</code>. Make sure <code style="font-family:var(--font-mono);font-size:13px;">make docker-up</code> is running.</p>
+  </div>
+
+  <div class="live-demo-panel reveal">
+    <div class="live-demo-header">
+      <h3 style="font-size: 1.2rem;">Test the Rate Limiter</h3>
+      <div class="server-status" id="server-status">
+        <div class="status-dot"></div>
+        <span id="status-text">Checking server...</span>
+      </div>
+    </div>
+    
+    <div class="demo-controls">
+      <input type="text" id="demo-key" class="demo-input" value="user-demo-123" placeholder="Enter an API Key (e.g. user-demo-123)">
+      <button class="demo-btn" id="demo-consume-btn" onclick="sendConsumeRequest()">Send /consume</button>
+    </div>
+    
+    <div class="gauge-container" id="gauge-container">
+      <!-- Gauge blocks will be populated by JS -->
+    </div>
+    
+    <div class="code-block" style="margin-top: 1rem;">
+      <div class="code-header">
+        <div class="code-filename" style="color: var(--accent);">Live Response Log</div>
+      </div>
+      <div class="demo-response" id="demo-response">
+        Waiting for requests...
+      </div>
+    </div>
+  </div>
+
+  <div class="api-demo reveal">
+    <div class="api-endpoint">
+      <div class="api-ep-header">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/consume</span>
+      </div>
+      <div class="api-ep-body">
+        <div style="color:var(--text3);font-size:10px;letter-spacing:0.1em;margin-bottom:8px;">REQUEST</div>
+        <span style="color:var(--accent2);">{</span><br>
+        &nbsp;&nbsp;<span style="color:var(--accent);">"key"</span>: <span style="color:#c3e88d;">"user-demo-123"</span><br>
+        <span style="color:var(--accent2);">}</span>
+        <br><br>
+        <div style="color:var(--text3);font-size:10px;letter-spacing:0.1em;margin-bottom:8px;">RESPONSE</div>
+        <span style="color:var(--accent2);">{</span><br>
+        &nbsp;&nbsp;<span style="color:var(--accent);">"allowed"</span>: <span style="color:var(--amber);">true</span>,<br>
+        &nbsp;&nbsp;<span style="color:var(--accent);">"remaining"</span>: <span style="color:var(--amber);">9</span>,<br>
+        &nbsp;&nbsp;<span style="color:var(--accent);">"retry_after"</span>: <span style="color:#c3e88d;">"0s"</span><br>
+        <span style="color:var(--accent2);">}</span>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:1rem;">
+      <div class="api-endpoint">
+        <div class="api-ep-header">
+          <span class="method post">POST</span>
+          <span class="endpoint-path">/check</span>
+        </div>
+        <div class="api-ep-body" style="font-size:11px;color:var(--text3);">
+          Peek without consuming. Returns same shape as /consume. Used for UI feedback before committing.
+        </div>
+      </div>
+      <div class="api-endpoint">
+        <div class="api-ep-header">
+          <span class="method get">GET</span>
+          <span class="endpoint-path">/health</span>
+        </div>
+        <div class="api-ep-body">
+          <span style="color:var(--accent2);">{</span> <span style="color:var(--accent);">"status"</span>: <span style="color:#c3e88d;">"ok"</span>, <span style="color:var(--accent);">"redis"</span>: <span style="color:#c3e88d;">"ok"</span> <span style="color:var(--accent2);">}</span>
+          <div style="color:var(--text3);font-size:11px;margin-top:8px;">Live Redis ping check on every call</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- SKILLS & BENCHMARKS sections remain the same ... -->
+<section id="skills">
+  <!-- Same as before -->
+  <div class="section-header reveal">
+    <span class="section-tag">What this demonstrates</span>
+    <h2>Skills proven by this project</h2>
+    <p class="section-desc">Every technical decision in this project maps to a real production engineering skill.</p>
+  </div>
+  <div class="skills-grid reveal">
+    <div class="skill-card">
+      <span class="skill-icon">⚙️</span>
+      <div class="skill-title">Distributed Systems Thinking</div>
+      <p class="skill-desc">Atomic Lua scripts eliminate TOCTOU races across replicas. Shared Redis state means consistent decisions regardless of which instance handles the request.</p>
+    </div>
+    <div class="skill-card">
+      <span class="skill-icon">🔵</span>
+      <div class="skill-title">Idiomatic Go</div>
+      <p class="skill-desc">Interface-driven design, factory pattern, pure stdlib <code>net/http</code>, structured logging, graceful shutdown.</p>
+    </div>
+    <div class="skill-card">
+      <span class="skill-icon">🔴</span>
+      <div class="skill-title">Redis Engineering</div>
+      <p class="skill-desc">Lua script atomicity, sorted sets for sliding windows, hash structures for token buckets, exponential backoff.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="footer-left">distributed-rate-limiter · Go · Redis · Docker</div>
+</footer>
+
+<script>
+  // Algorithm info logic
+  const algoData = {
+    fixed: {
+      why: 'Easiest to reason about. A counter resets on a schedule. Cheapest Redis operation: one INCR, one EXPIRE.',
+      redis: 'INCR + EXPIRE via Lua. The Lua script ensures the counter increment and TTL set are atomic.',
+      tradeoff: 'A client can make 2× the allowed requests by timing requests at the end and start of adjacent windows.',
+      test: 'Unit test checks allow under limit, deny over limit, and exact count with 50 concurrent goroutines.'
+    },
+    sliding: {
+      why: 'Most accurate algorithm. Tracks every request timestamp — no window boundary burst is possible.',
+      redis: 'ZADD adds new timestamp, ZREMRANGEBYSCORE prunes old ones, ZCARD counts active. Three ops, one Lua script.',
+      tradeoff: 'Higher memory: stores one sorted set entry per request. At 1000 req/min, thats 1000 entries per key.',
+      test: 'Expiry test verifies requests older than the window are not counted. Concurrency test checks exact limits.'
+    },
+    token: {
+      why: 'Best for APIs where occasional bursting is acceptable. Unused capacity accumulates and can be spent later.',
+      redis: 'Redis Hash stores {tokens, last_refill_unix_ns}. Lua script reads both, calculates refill, deducts token.',
+      tradeoff: 'Slightly more complex: must compute elapsed time since last refill on every request to calculate new token count.',
+      test: 'Refill test waits for one refill period, then asserts tokens increased. Concurrency test validates exact burst limit.'
+    },
+    leaky: {
+      why: 'Best for protecting downstream services. Output rate is strictly uniform — no bursting ever.',
+      redis: 'Stores a single Theoretical Arrival Time (TAT). If now < TAT, request is early and denied. TAT advances by 1/rate.',
+      tradeoff: 'No burst tolerance at all. If a client sends 10 requests simultaneously, 9 are immediately rejected.',
+      test: 'Rate test sends requests at 2× allowed rate and asserts exactly 50% are denied. No randomness — deterministic.'
+    }
+  };
+
+  function showAlgo(id) {
+    document.querySelectorAll('.algo-card').forEach(c => c.classList.remove('active'));
+    document.querySelector('.algo-card.' + id).classList.add('active');
+    const d = algoData[id];
+    document.getElementById('detail-content').innerHTML = `
+      <div>
+        <span class="detail-label">Why this algorithm</span>
+        <div class="detail-val">${d.why}</div><br>
+        <span class="detail-label">Redis implementation</span>
+        <div class="detail-val" style="font-family:var(--font-mono);font-size:13px;color:var(--text2);">${d.redis}</div>
+      </div>
+      <div>
+        <span class="detail-label">Trade-off</span>
+        <div class="detail-val">${d.tradeoff}</div><br>
+        <span class="detail-label">How it's tested</span>
+        <div class="detail-val">${d.test}</div>
+      </div>
+    `;
+  }
+  
+  // Initialize first algo
+  showAlgo('fixed');
+
+  // API Demo Logic
+  const API_URL = 'http://localhost:8080';
+  let totalAllowed = 10; // Default fallback
+
+  async function checkServerStatus() {
+    const statusEl = document.getElementById('server-status');
+    const textEl = document.getElementById('status-text');
+    try {
+      const res = await fetch(`${API_URL}/health`);
+      if (res.ok) {
+        statusEl.className = 'server-status online';
+        textEl.innerText = 'Backend Online (Local)';
+      } else {
+        throw new Error('Not OK');
+      }
+    } catch (err) {
+      statusEl.className = 'server-status';
+      textEl.innerText = 'Backend Offline';
+    }
+    setTimeout(checkServerStatus, 5000);
+  }
+
+  function updateGauge(remaining, allowed) {
+    const container = document.getElementById('gauge-container');
+    container.innerHTML = '';
+    const max = Math.max(10, allowed ? 10 : remaining + 1); // rough guess if we don't know total limit
+    for (let i = 0; i < max; i++) {
+      const block = document.createElement('div');
+      block.className = 'gauge-block';
+      if (allowed && i < remaining) {
+        block.classList.add('filled');
+      } else if (!allowed && i === 0) {
+        block.classList.add('error');
+      }
+      container.appendChild(block);
+    }
+  }
+
+  function logResponse(text, isError) {
+    const logBox = document.getElementById('demo-response');
+    const time = new Date().toLocaleTimeString();
+    const entry = document.createElement('div');
+    entry.className = 'response-line';
+    entry.style.color = isError ? 'var(--accent4)' : 'var(--accent3)';
+    entry.innerText = `[${time}] ${text}`;
+    
+    logBox.prepend(entry);
+    
+    logBox.classList.remove('flash-green', 'flash-red');
+    void logBox.offsetWidth; // trigger reflow
+    logBox.classList.add(isError ? 'flash-red' : 'flash-green');
+  }
+
+  async function sendConsumeRequest() {
+    const key = document.getElementById('demo-key').value || 'demo-user-123';
+    try {
+      const res = await fetch(`${API_URL}/consume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key })
+      });
+      
+      const data = await res.json();
+      const statusText = data.allowed ? `ALLOWED (Remaining: ${data.remaining})` : `DENIED (Retry After: ${data.retry_after})`;
+      
+      logResponse(`POST /consume -> ${res.status} | ${statusText}`, !data.allowed);
+      updateGauge(data.remaining, data.allowed);
+      
+    } catch (err) {
+      logResponse(`ERROR: Could not connect to ${API_URL}. Is make docker-up running?`, true);
+    }
+  }
+
+  // Init
+  checkServerStatus();
+  updateGauge(10, true);
+
+  // Scroll reveals
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+</body>
+</html>

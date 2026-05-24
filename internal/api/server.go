@@ -29,10 +29,11 @@ func NewServer(appCfg *config.Config, limCfg *limiter.LimiterConfig, lim limiter
 	mux.HandleFunc("POST /consume", ConsumeHandler(lim, tracker))
 
 	// Wire Middleware
-	// Order: Recovery (outer) -> RequestID -> RateLimit (inner)
+	// Order: CORS (outermost) -> Recovery -> RequestID -> RateLimit (inner)
 	handler := middleware.RateLimit(lim, limCfg)(mux)
 	handler = middleware.RequestID(handler)
 	handler = middleware.Recovery(handler)
+	handler = middleware.CORS(handler)
 
 	addr := fmt.Sprintf(":%d", appCfg.ServerPort)
 	srv := &http.Server{
